@@ -1,5 +1,7 @@
 # rails-core
 
+[![Codecov](https://codecov.io/gh/railsinfra/rails-core/graph/badge.svg?branch=main)](https://app.codecov.io/gh/railsinfra/rails-core)
+
 ## What this project is / is not
 
 **This project is**
