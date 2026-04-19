@@ -38,7 +38,18 @@ Wait for first-time `cargo`/`bundle` downloads. Then open:
 
 Read [architecture.md](architecture.md) for the one-page diagram and boundaries.
 
-## 5. Stop / reset containers
+## 5. Health and contract tests (optional)
+
+With the stack still running:
+
+```bash
+make health   # gateway: /users/health, /accounts/health, /ledger/health + /docs/
+make test     # health JSON checks + full users → accounts → ledger HTTP flow
+```
+
+`make test` expects the gateway at `http://127.0.0.1:8080` unless you set `GATEWAY_URL`.
+
+## 6. Stop / reset containers
 
 ```bash
 make reset
@@ -48,6 +59,6 @@ make reset
 
 This stops Docker Compose; it does **not** drop external databases.
 
-## 6. Optional consumers
+## 7. Optional consumers
 
 Admin UI and other gateways can call this stack through **http://localhost:8080** during local development; they live in separate repositories (for example under the `railsinfra` org).
