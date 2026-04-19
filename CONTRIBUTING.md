@@ -34,8 +34,40 @@ From each service directory, use the same commands CI uses:
 
 From the repository root, `make verify` checks that vendored service folders exist.
 
+## Branching (Gitflow)
+
+We follow **Gitflow**-style branching:
+
+- **`main`** — production-ready history; only merges from `release/*` or `hotfix/*`.
+- **`develop`** — day-to-day integration; default base for new work.
+- **`feature/*`** — branch from `develop` for new work (for example `feature/rai-6-open-source-readiness`). Open a PR back into `develop`.
+- **`release/*`** — branch from `develop` when cutting a release; only release prep and fixes, then merge to `main` and back into `develop`.
+- **`hotfix/*`** — branch from `main` for urgent production fixes, then merge to `main` and `develop`.
+
+If your change is small and the team agrees on an exception, ask before opening a feature PR against `main`.
+
+## Commit messages (Conventional Commits)
+
+Use **[Conventional Commits](https://www.conventionalcommits.org/)** so history and changelogs stay readable.
+
+Format:
+
+```
+<type>(<scope>): <subject>
+
+- optional bullet (keep the body short; two bullets max)
+```
+
+- **Types** we use: `feat`, `fix`, `refactor`, `test`, `style`, `docs`, `chore`, `perf`, `ci`, `build`, `revert`.
+- **Subject**: imperative mood, lowercase, no trailing period, about **72 characters** max.
+- **Scope**: optional; name the area (for example `gateway`, `ledger-service`, `ci`).
+- **Breaking changes**: add `!` after the type or scope, for example `feat(api)!: remove legacy transfer endpoint`.
+
+Squash merges should preserve a conventional **subject line** on the main integration branch.
+
 ## Pull requests
 
+- Branch from **`develop`** using the Gitflow rules above, unless you are on a release or hotfix line.
 - Keep the change focused on one concern when possible.
 - Describe **what** changed and **why** in the PR body (plain language is enough).
 - Ensure CI is green before requesting review.
