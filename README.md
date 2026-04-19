@@ -1,6 +1,6 @@
 # rails-core
 
-Lean **financial infrastructure**: three **vendored** services (Rust + Rails), **nginx** gateway, **proto v1** contracts, **Docker Compose**, one **`.env`**.
+Lean **financial infrastructure**: three services (Rust + Rails), an **nginx** gateway, **proto** contracts, **Docker Compose**, and **`.env.example`**.
 
 ## One command
 
@@ -13,22 +13,48 @@ make dev               # http://localhost:8080 — gateway + all services
 ## Layout
 
 ```
-.
+rails-core/
+│
 ├── services/
-│   ├── users-service/      # Rust (vendored source)
-│   ├── accounts-service/   # Rust (vendored source)
-│   └── ledger-service/     # Rails (vendored source)
-├── gateway/nginx.conf
-├── proto/users.proto
-├── proto/accounts.proto
-├── proto/ledger.proto
-├── scripts/bootstrap.sh seed.sh reset.sh
-├── infra/docker/ infra/postgres/
-├── docs/architecture.md docs/quickstart.md docs/index.html
+│   ├── users-service/        # Rust: authentication, users, tenants
+│   ├── accounts-service/     # Rust: accounts, balances, transfers
+│   └── ledger-service/       # Rails: double-entry accounting system
+│
+├── gateway/
+│   └── nginx.conf            # reverse proxy entrypoint
+│
+├── proto/
+│   ├── users.proto
+│   ├── accounts.proto
+│   └── ledger.proto
+│
+├── config/
+│   └── services.json         # service paths (bootstrap, verify-layout)
+│
+├── scripts/
+│   ├── bootstrap.sh
+│   ├── seed.sh
+│   ├── reset.sh
+│   ├── verify-layout.sh
+│   ├── health-check.sh
+│   ├── deploy-railway.sh     # optional Railway helper (Rust services)
+│   └── lib/                  # read_manifest.py, health_check.py
+│
+├── infra/
+│   ├── docker/
+│   └── postgres/
+│
+├── docs/
+│   ├── architecture.md
+│   ├── quickstart.md
+│   ├── index.html
+│   └── RAILWAY_DEPLOYMENT.md
+│
 ├── docker-compose.yml
 ├── Makefile
-├── .env.example
-└── README.md
+├── README.md
+├── .gitignore
+└── .env.example
 ```
 
 ## Docs
