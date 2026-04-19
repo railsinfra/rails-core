@@ -227,12 +227,6 @@ impl FromRequestParts<AppState> for ApiKeyOnlyContext {
     type Rejection = AppError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
-        // #region agent log
-        let has_api_key_header = parts.headers.get(API_KEY_HEADER).is_some();
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/sibabale.joja/projects/personal/rails/.cursor/debug.log") {
-            let _ = std::io::Write::write_fmt(&mut f, format_args!("{{\"location\":\"auth.rs:ApiKeyOnlyContext\",\"message\":\"entry\",\"data\":{{\"has_x_api_key_header\":{}}},\"timestamp\":{},\"hypothesisId\":\"C\"}}\n", has_api_key_header, chrono::Utc::now().timestamp_millis()));
-        }
-        // #endregion
         let environment_id_from_uuid_header: Option<Uuid> = parts
             .headers
             .get(ENVIRONMENT_ID_HEADER)
@@ -270,12 +264,6 @@ impl FromRequestParts<AppState> for ApiKeyOnlyContext {
         .fetch_optional(&state.db)
         .await
         .map_err(|_| AppError::Internal)?;
-
-        // #region agent log
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/Users/sibabale.joja/projects/personal/rails/.cursor/debug.log") {
-            let _ = std::io::Write::write_fmt(&mut f, format_args!("{{\"location\":\"auth.rs:ApiKeyOnlyContext\",\"message\":\"after DB lookup\",\"data\":{{\"key_found_in_db\":{}}},\"timestamp\":{},\"hypothesisId\":\"D\"}}\n", rec.is_some(), chrono::Utc::now().timestamp_millis()));
-        }
-        // #endregion
 
         let rec = rec.ok_or(AppError::Unauthorized)?;
 
@@ -358,4 +346,18 @@ fn hex_encode(bytes: &[u8]) -> String {
         s.push(HEX[(b & 0x0f) as usize] as char);
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hash_api_key;
+
+    #[test]
+    fn hash_api_key_is_stable_for_same_input() {
+        let a = hash_api_key("my-api-key").expect("hash");
+        let b = hash_api_key("my-api-key").expect("hash");
+        assert_eq!(a, b);
+        assert_ne!(a, hash_api_key("other-key").expect("hash"));
+        assert_eq!(a.len(), 64);
+    }
 }

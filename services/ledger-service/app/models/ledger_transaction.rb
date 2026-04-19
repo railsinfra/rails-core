@@ -9,7 +9,8 @@ class LedgerTransaction < ApplicationRecord
   validates :status, presence: true, inclusion: { in: %w[pending posted failed] }
   validates :idempotency_key, presence: true
 
-  has_many :ledger_entries, dependent: :destroy
+  has_many :ledger_entries, foreign_key: 'transaction_id', inverse_of: :ledger_transaction,
+                            dependent: :destroy
 
   enum status: {
     pending: 'pending',

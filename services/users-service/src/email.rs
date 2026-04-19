@@ -188,7 +188,10 @@ impl EmailService {
 
 #[cfg(test)]
 mod tests {
-    use super::escape_html;
+    use super::{escape_html, EmailService};
+    use crate::config::Config;
+    use httpmock::Method::POST;
+    use httpmock::MockServer;
 
     #[test]
     fn escape_html_replaces_entities() {
@@ -196,5 +199,95 @@ mod tests {
         let expected = "Tom &amp; Jerry &lt; &quot;quote&quot; &#39;single&#39;";
 
         assert_eq!(escape_html(input), expected);
+    }
+
+    #[tokio::test]
+    async fn send_password_reset_hits_resend_when_configured() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/emails");
+                then.status(200).body(r#"{"id":"1"}"#);
+            })
+            .await;
+
+        let cfg = Config {
+            database_url: "postgresql://stub".into(),
+            server_addr: "0.0.0.0:0".into(),
+            grpc_port: 50051,
+            accounts_grpc_url: "http://127.0.0.1:1".into(),
+            sentry_dsn: None,
+            environment: "test".into(),
+            resend_api_key: Some("secret".into()),
+            resend_from_email: "from@example.com".into(),
+            resend_from_name: "Rails".into(),
+            resend_base_url: server.base_url(),
+            resend_beta_notification_email: "beta@example.com".into(),
+            frontend_base_url: "http://localhost:5173".into(),
+        };
+        let svc = EmailService::new(&cfg);
+        assert!(svc.is_configured());
+        svc
+            .send_password_reset("user@example.com", "tok")
+            .await
+            .expect("email ok");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn send_password_reset_not_configured_returns_error() {
+        let cfg = Config {
+            database_url: "postgresql://stub".into(),
+            server_addr: "0.0.0.0:0".into(),
+            grpc_port: 50051,
+            accounts_grpc_url: "http://127.0.0.1:1".into(),
+            sentry_dsn: None,
+            environment: "test".into(),
+            resend_api_key: None,
+            resend_from_email: "from@example.com".into(),
+            resend_from_name: "Rails".into(),
+            resend_base_url: "https://api.resend.com".into(),
+            resend_beta_notification_email: "beta@example.com".into(),
+            frontend_base_url: "http://localhost:5173".into(),
+        };
+        let svc = EmailService::new(&cfg);
+        assert!(!svc.is_configured());
+        let err = svc
+            .send_password_reset("user@example.com", "tok")
+            .await
+            .expect_err("not configured");
+        assert!(err.contains("not configured"));
+    }
+
+    #[tokio::test]
+    async fn send_beta_application_hits_resend_when_configured() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/emails");
+                then.status(200).body(r#"{"id":"2"}"#);
+            })
+            .await;
+
+        let cfg = Config {
+            database_url: "postgresql://stub".into(),
+            server_addr: "0.0.0.0:0".into(),
+            grpc_port: 50051,
+            accounts_grpc_url: "http://127.0.0.1:1".into(),
+            sentry_dsn: None,
+            environment: "test".into(),
+            resend_api_key: Some("secret".into()),
+            resend_from_email: "from@example.com".into(),
+            resend_from_name: "Rails".into(),
+            resend_base_url: server.base_url(),
+            resend_beta_notification_email: "notify@example.com".into(),
+            frontend_base_url: "http://localhost:5173".into(),
+        };
+        let svc = EmailService::new(&cfg);
+        svc
+            .send_beta_application("Pat", "pat@example.com", "Co", "Use case")
+            .await
+            .expect("beta email ok");
+        mock.assert_async().await;
     }
 }

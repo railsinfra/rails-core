@@ -182,3 +182,25 @@ pub async fn revoke_api_key(
         status: "revoked".to_string(),
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::CreateApiKeyRequest;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    #[test]
+    fn create_api_key_request_deserializes_optional_env() {
+        let v = json!({ "environment_id": null });
+        let r: CreateApiKeyRequest = serde_json::from_value(v).unwrap();
+        assert!(r.environment_id.is_none());
+    }
+
+    #[test]
+    fn create_api_key_request_deserializes_with_env() {
+        let id = Uuid::new_v4();
+        let v = json!({ "environment_id": id });
+        let r: CreateApiKeyRequest = serde_json::from_value(v).unwrap();
+        assert_eq!(r.environment_id, Some(id));
+    }
+}

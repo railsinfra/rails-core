@@ -14,25 +14,37 @@ pub struct Config {
     pub frontend_base_url: String,
 }
 
+pub(crate) fn strip_jdbc_database_url_prefix(url: &str) -> &str {
+    url.strip_prefix("jdbc:").unwrap_or(url)
+}
+
+pub(crate) fn compose_server_addr(
+    host: &str,
+    port: Option<u16>,
+    server_addr_env: Option<&str>,
+) -> String {
+    if let Some(port) = port {
+        format!("{}:{}", host, port)
+    } else {
+        server_addr_env
+            .map(String::from)
+            .unwrap_or_else(|| "0.0.0.0:8080".to_string())
+    }
+}
+
 pub fn load() -> Result<Config, anyhow::Error> {
-    let mut database_url = std::env::var("DATABASE_URL")
+    let database_url_raw = std::env::var("DATABASE_URL")
         .map_err(|_| anyhow::anyhow!(
             "DATABASE_URL environment variable is required. \
             Set it to your PostgreSQL connection string (e.g., Supabase, Neon, or local PostgreSQL). \
             Example: postgresql://user:password@host:5432/database"
         ))?;
-
-    if let Some(stripped) = database_url.strip_prefix("jdbc:") {
-        database_url = stripped.to_string();
-    }
+    let database_url = strip_jdbc_database_url_prefix(&database_url_raw).to_string();
 
     let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
     let port = std::env::var("PORT").ok().and_then(|p| p.parse::<u16>().ok());
-    let server_addr = if let Some(port) = port {
-        format!("{}:{}", host, port)
-    } else {
-        std::env::var("SERVER_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string())
-    };
+    let server_addr_env = std::env::var("SERVER_ADDR").ok();
+    let server_addr = compose_server_addr(&host, port, server_addr_env.as_deref());
 
     let grpc_port = std::env::var("GRPC_PORT")
         .ok()
@@ -72,4 +84,62 @@ pub fn load() -> Result<Config, anyhow::Error> {
         resend_beta_notification_email,
         frontend_base_url,
     })
+}
+
+#[cfg(test)]
+impl Config {
+    /// Minimal config for unit tests that only exercise a subset of fields (e.g. gRPC client init).
+    pub fn test_stub_with_accounts_grpc(accounts_grpc_url: String) -> Self {
+        Self {
+            database_url: "postgresql://stub:stub@127.0.0.1:1/stub".into(),
+            server_addr: "0.0.0.0:0".into(),
+            grpc_port: 50051,
+            accounts_grpc_url,
+            sentry_dsn: None,
+            environment: "test".into(),
+            resend_api_key: None,
+            resend_from_email: "noreply@example.com".into(),
+            resend_from_name: "Test".into(),
+            resend_base_url: "https://api.example.test".into(),
+            resend_beta_notification_email: "beta@example.com".into(),
+            frontend_base_url: "http://localhost:5173".into(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{compose_server_addr, strip_jdbc_database_url_prefix};
+
+    #[test]
+    fn strip_jdbc_prefix() {
+        assert_eq!(
+            strip_jdbc_database_url_prefix("jdbc:postgresql://localhost/db"),
+            "postgresql://localhost/db"
+        );
+        assert_eq!(
+            strip_jdbc_database_url_prefix("postgresql://localhost/db"),
+            "postgresql://localhost/db"
+        );
+    }
+
+    #[test]
+    fn compose_server_addr_prefers_port_env() {
+        assert_eq!(
+            compose_server_addr("127.0.0.1", Some(3000), Some("ignored:1")),
+            "127.0.0.1:3000"
+        );
+    }
+
+    #[test]
+    fn compose_server_addr_falls_back() {
+        assert_eq!(
+            compose_server_addr("0.0.0.0", None, Some("0.0.0.0:9090")),
+            "0.0.0.0:9090"
+        );
+        assert_eq!(
+            compose_server_addr("0.0.0.0", None, None),
+            "0.0.0.0:8080"
+        );
+    }
 }

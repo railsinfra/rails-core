@@ -29,9 +29,17 @@ pub struct EnvironmentInfo {
     pub r#type: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct RefreshTokenRequest {
     pub refresh_token: String,
+}
+
+impl std::fmt::Debug for RefreshTokenRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RefreshTokenRequest")
+            .field("refresh_token", &"[REDACTED]")
+            .finish()
+    }
 }
 
 #[derive(Serialize)]
@@ -313,4 +321,32 @@ pub async fn revoke_token(
     Ok(Json(RevokeTokenResponse {
         status: "revoked".to_string(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LoginRequest, RefreshTokenRequest};
+    use serde_json::json;
+
+    #[test]
+    fn login_request_deserializes() {
+        let v = json!({
+            "email": " u@x.com ",
+            "password": "secret",
+            "environment_id": null
+        });
+        let r: LoginRequest = serde_json::from_value(v).unwrap();
+        assert_eq!(r.email, " u@x.com ");
+        assert!(r.environment_id.is_none());
+    }
+
+    #[test]
+    fn refresh_token_request_json_roundtrip() {
+        let r = RefreshTokenRequest {
+            refresh_token: "rtok".into(),
+        };
+        let s = serde_json::to_string(&r).unwrap();
+        let back: RefreshTokenRequest = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.refresh_token, "rtok");
+    }
 }
