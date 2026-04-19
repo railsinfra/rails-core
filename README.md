@@ -20,13 +20,23 @@
 
 Lean **financial infrastructure**: three services (Rust + Rails), an **nginx** gateway, **proto** contracts, **Docker Compose**, and **`.env.example`**.
 
-## Quick start (one command after env)
+## Quick start
+
+### 1. Clone and env file
 
 ```bash
 git clone https://github.com/railsinfra/rails-core.git
 cd rails-core
 cp .env.example .env
-# Edit .env: set USERS_DATABASE_URL, ACCOUNTS_DATABASE_URL, LEDGER_DATABASE_URL (three databases).
+```
+
+### 2. Database URLs
+
+Set `NEON_API_KEY` in `.env` ([Neon API keys](https://neon.tech/docs/manage/api-keys)).
+
+### 3. Run
+
+```bash
 make dev
 ```
 
@@ -67,9 +77,11 @@ make reset
 | **accounts-service** (Rust) | Accounts, balances, transfers; talks to users + ledger over gRPC |
 | **ledger-service** (Rails) | Double-entry ledger over gRPC (and HTTP under `/ledger/`) |
 
-## Example API flow (curl)
+## Example API flow
 
-All calls below use the gateway. Replace emails if you already registered the same address.
+**Postman:** import [`postman/rails-core-example-flow.postman_collection.json`](postman/rails-core-example-flow.postman_collection.json), keep `base_url` as `http://localhost:8080` (or change it), then run requests **1 → 5** in order; tests save tokens and account IDs into collection variables.
+
+**curl (equivalent):** all calls below use the gateway. Replace emails if you already registered the same address.
 
 ```bash
 export BASE=http://localhost:8080
