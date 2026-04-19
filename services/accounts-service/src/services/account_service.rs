@@ -1,7 +1,7 @@
 use tracing::info;
 use crate::errors::AppError;
 use crate::ledger_grpc::LedgerGrpc;
-use crate::models::{Account, AccountStatus, CreateAccountRequest, TransactionKind, TransactionStatus, PaginatedAccountsResponse};
+use crate::models::{Account, AccountStatus, CreateAccountRequest, Transaction, TransactionKind, TransactionStatus, PaginatedAccountsResponse};
 use crate::repositories::{AccountHolderRepository, AccountRepository, TransactionRepository};
 use crate::utils::generate_account_number;
 use sqlx::PgPool;
@@ -9,7 +9,36 @@ use uuid::Uuid;
 
 pub struct AccountService;
 
+/// Whether this HTTP request should invoke the ledger or return the current row as-is.
+enum ImmediateLedgerOutcome {
+    ReturnWithoutPost(Transaction),
+    Post(Transaction),
+}
+
 impl AccountService {
+    /// Single-writer path: `posted` / `posting` / `failed` are returned unchanged; `pending` is claimed
+    /// (`pending`→`posting`) so the retry worker cannot start a concurrent ledger post for the same row.
+    async fn resolve_immediate_ledger_post(
+        pool: &PgPool,
+        transaction: Transaction,
+    ) -> Result<ImmediateLedgerOutcome, AppError> {
+        match transaction.status {
+            TransactionStatus::Posted | TransactionStatus::Posting | TransactionStatus::Failed => {
+                Ok(ImmediateLedgerOutcome::ReturnWithoutPost(transaction))
+            }
+            TransactionStatus::Pending => {
+                if let Some(claimed) =
+                    TransactionRepository::try_claim_pending_for_post(pool, transaction.id).await?
+                {
+                    Ok(ImmediateLedgerOutcome::Post(claimed))
+                } else {
+                    let current = TransactionRepository::find_by_id(pool, transaction.id).await?;
+                    Ok(ImmediateLedgerOutcome::ReturnWithoutPost(current))
+                }
+            }
+        }
+    }
+
     /// Create account for a holder (SDK flow: email + names, API key in header).
     /// Resolves organization and admin from users service; enforces max 1 checking + 1 saving per holder.
     pub async fn create_account_with_holder(
@@ -270,40 +299,44 @@ impl AccountService {
             "transaction_intent_created"
         );
 
-        // Attempt to post to Ledger via gRPC (eventual consistency: keep pending on failure)
-        let correlation_id = correlation_id.unwrap_or_else(|| transaction.id.to_string());
-        let post_result = ledger_grpc
-            .post_transaction(
-                organization_id,
-                &environment,
-                "SYSTEM_CASH_CONTROL".to_string(),
-                account_id.to_string(),
-                amount,
-                currency.clone(),
-                transaction.id,
-                transaction.idempotency_key.clone(),
-                correlation_id,
-            )
-            .await;
+        let transaction = match Self::resolve_immediate_ledger_post(pool, transaction).await? {
+            ImmediateLedgerOutcome::ReturnWithoutPost(tx) => tx,
+            ImmediateLedgerOutcome::Post(tx) => {
+                let correlation_id = correlation_id.unwrap_or_else(|| tx.id.to_string());
+                let post_result = ledger_grpc
+                    .post_transaction(
+                        organization_id,
+                        &environment,
+                        "SYSTEM_CASH_CONTROL".to_string(),
+                        account_id.to_string(),
+                        amount,
+                        currency.clone(),
+                        tx.id,
+                        tx.idempotency_key.clone(),
+                        correlation_id,
+                    )
+                    .await;
 
-        let transaction = match post_result {
-            Ok(()) => {
-                TransactionRepository::update_status(pool, transaction.id, TransactionStatus::Posted, None).await?
-            }
-            Err(e) => {
-                let reason = format!("{}", e);
-                tracing::warn!(
-                    transaction_id = %transaction.id,
-                    error = %reason,
-                    "Ledger gRPC post failed; leaving transaction pending"
-                );
-                TransactionRepository::update_status(
-                    pool,
-                    transaction.id,
-                    TransactionStatus::Pending,
-                    Some(&reason),
-                )
-                .await?
+                match post_result {
+                    Ok(()) => {
+                        TransactionRepository::update_status(pool, tx.id, TransactionStatus::Posted, None).await?
+                    }
+                    Err(e) => {
+                        let reason = format!("{}", e);
+                        tracing::warn!(
+                            transaction_id = %tx.id,
+                            error = %reason,
+                            "Ledger gRPC post failed; leaving transaction pending"
+                        );
+                        TransactionRepository::update_status(
+                            pool,
+                            tx.id,
+                            TransactionStatus::Pending,
+                            Some(&reason),
+                        )
+                        .await?
+                    }
+                }
             }
         };
 
@@ -352,7 +385,10 @@ impl AccountService {
         )
         .await?
         {
-            if existing.status == TransactionStatus::Posted {
+            if matches!(
+                existing.status,
+                TransactionStatus::Posted | TransactionStatus::Posting
+            ) {
                 return Ok((account, existing));
             }
             // Pending: fall through to attempt Ledger post
@@ -403,40 +439,44 @@ impl AccountService {
             "transaction_intent_created"
         );
 
-        // Attempt to post to Ledger via gRPC (withdraw = account -> SYSTEM_CASH_CONTROL)
-        let correlation_id = correlation_id.unwrap_or_else(|| transaction.id.to_string());
-        let post_result = ledger_grpc
-            .post_transaction(
-                organization_id,
-                &environment,
-                account_id.to_string(),
-                "SYSTEM_CASH_CONTROL".to_string(),
-                amount,
-                currency.clone(),
-                transaction.id,
-                transaction.idempotency_key.clone(),
-                correlation_id,
-            )
-            .await;
+        let transaction = match Self::resolve_immediate_ledger_post(pool, transaction).await? {
+            ImmediateLedgerOutcome::ReturnWithoutPost(tx) => tx,
+            ImmediateLedgerOutcome::Post(tx) => {
+                let correlation_id = correlation_id.unwrap_or_else(|| tx.id.to_string());
+                let post_result = ledger_grpc
+                    .post_transaction(
+                        organization_id,
+                        &environment,
+                        account_id.to_string(),
+                        "SYSTEM_CASH_CONTROL".to_string(),
+                        amount,
+                        currency.clone(),
+                        tx.id,
+                        tx.idempotency_key.clone(),
+                        correlation_id,
+                    )
+                    .await;
 
-        let transaction = match post_result {
-            Ok(()) => {
-                TransactionRepository::update_status(pool, transaction.id, TransactionStatus::Posted, None).await?
-            }
-            Err(e) => {
-                let reason = format!("{}", e);
-                tracing::warn!(
-                    transaction_id = %transaction.id,
-                    error = %reason,
-                    "Ledger gRPC post failed; leaving transaction pending"
-                );
-                TransactionRepository::update_status(
-                    pool,
-                    transaction.id,
-                    TransactionStatus::Pending,
-                    Some(&reason),
-                )
-                .await?
+                match post_result {
+                    Ok(()) => {
+                        TransactionRepository::update_status(pool, tx.id, TransactionStatus::Posted, None).await?
+                    }
+                    Err(e) => {
+                        let reason = format!("{}", e);
+                        tracing::warn!(
+                            transaction_id = %tx.id,
+                            error = %reason,
+                            "Ledger gRPC post failed; leaving transaction pending"
+                        );
+                        TransactionRepository::update_status(
+                            pool,
+                            tx.id,
+                            TransactionStatus::Pending,
+                            Some(&reason),
+                        )
+                        .await?
+                    }
+                }
             }
         };
 
@@ -510,7 +550,10 @@ impl AccountService {
         )
         .await?
         {
-            if existing.status == TransactionStatus::Posted {
+            if matches!(
+                existing.status,
+                TransactionStatus::Posted | TransactionStatus::Posting
+            ) {
                 return Ok((from_account, to_account, existing));
             }
             // Pending: fall through to attempt Ledger post
@@ -561,43 +604,205 @@ impl AccountService {
             "transaction_intent_created"
         );
 
-        // Attempt to post to Ledger via gRPC (eventual consistency: keep pending on failure)
-        let correlation_id = correlation_id.unwrap_or_else(|| transaction.id.to_string());
-        let post_result = ledger_grpc
-            .post_transaction(
-                from_org,
-                &environment,
-                from_account_id.to_string(),
-                to_account_id.to_string(),
-                amount,
-                from_currency.clone(),
-                transaction.id,
-                transaction.idempotency_key.clone(),
-                correlation_id,
-            )
-            .await;
+        let transaction = match Self::resolve_immediate_ledger_post(pool, transaction).await? {
+            ImmediateLedgerOutcome::ReturnWithoutPost(tx) => tx,
+            ImmediateLedgerOutcome::Post(tx) => {
+                let correlation_id = correlation_id.unwrap_or_else(|| tx.id.to_string());
+                let post_result = ledger_grpc
+                    .post_transaction(
+                        from_org,
+                        &environment,
+                        from_account_id.to_string(),
+                        to_account_id.to_string(),
+                        amount,
+                        from_currency.clone(),
+                        tx.id,
+                        tx.idempotency_key.clone(),
+                        correlation_id,
+                    )
+                    .await;
 
-        let transaction = match post_result {
-            Ok(()) => {
-                TransactionRepository::update_status(pool, transaction.id, TransactionStatus::Posted, None).await?
-            }
-            Err(e) => {
-                let reason = format!("{}", e);
-                tracing::warn!(
-                    transaction_id = %transaction.id,
-                    error = %reason,
-                    "Ledger gRPC post failed; leaving transaction pending"
-                );
-                TransactionRepository::update_status(
-                    pool,
-                    transaction.id,
-                    TransactionStatus::Pending,
-                    Some(&reason),
-                )
-                .await?
+                match post_result {
+                    Ok(()) => {
+                        TransactionRepository::update_status(pool, tx.id, TransactionStatus::Posted, None).await?
+                    }
+                    Err(e) => {
+                        let reason = format!("{}", e);
+                        tracing::warn!(
+                            transaction_id = %tx.id,
+                            error = %reason,
+                            "Ledger gRPC post failed; leaving transaction pending"
+                        );
+                        TransactionRepository::update_status(
+                            pool,
+                            tx.id,
+                            TransactionStatus::Pending,
+                            Some(&reason),
+                        )
+                        .await?
+                    }
+                }
             }
         };
 
         Ok((from_account, to_account, transaction))
+    }
+}
+
+#[cfg(test)]
+mod immediate_ledger_resolve_tests {
+    use super::{AccountService, ImmediateLedgerOutcome};
+    use crate::models::{Transaction, TransactionStatus};
+    use crate::repositories::TransactionRepository;
+    use chrono::Duration;
+    use sqlx::postgres::PgPoolOptions;
+    use sqlx::PgPool;
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::postgres::Postgres;
+    use uuid::Uuid;
+
+    async fn migrated_pool() -> (testcontainers::ContainerAsync<Postgres>, PgPool) {
+        let container = Postgres::default()
+            .start()
+            .await
+            .expect("start postgres testcontainer");
+        let host = container.get_host().await.expect("container host");
+        let port = container
+            .get_host_port_ipv4(5432)
+            .await
+            .expect("container port");
+        let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect(&url)
+            .await
+            .expect("connect to test postgres");
+        sqlx::query(r#"CREATE EXTENSION IF NOT EXISTS "pgcrypto""#)
+            .execute(&pool)
+            .await
+            .expect("create pgcrypto extension for gen_random_uuid");
+        sqlx::migrate!("./migrations_accounts")
+            .run(&pool)
+            .await
+            .expect("run migrations_accounts");
+        (container, pool)
+    }
+
+    async fn insert_pending(pool: &PgPool, org: Uuid, idem: &str) -> Transaction {
+        let id = Uuid::new_v4();
+        let acc = Uuid::new_v4();
+        let age_secs: i64 = Duration::minutes(5).num_seconds().max(1);
+        sqlx::query(
+            r#"
+            INSERT INTO transactions (
+                id, organization_id, from_account_id, to_account_id, amount, currency,
+                transaction_kind, status, failure_reason, idempotency_key, environment,
+                description, external_recipient_id, reference_id, created_at, updated_at
+            )
+            VALUES ($1, $2, $3, $4, 50, 'USD', 'deposit', 'pending', NULL, $5, 'sandbox',
+                    NULL, NULL, NULL,
+                    NOW() - ($6 * INTERVAL '1 second'),
+                    NOW() - ($6 * INTERVAL '1 second'))
+            "#,
+        )
+        .bind(id)
+        .bind(org)
+        .bind(acc)
+        .bind(acc)
+        .bind(idem)
+        .bind(age_secs)
+        .execute(pool)
+        .await
+        .unwrap();
+        TransactionRepository::find_by_id(pool, id).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn resolve_posted_returns_without_claim() {
+        let (_c, pool) = migrated_pool().await;
+        let org = Uuid::new_v4();
+        let mut tx = insert_pending(&pool, org, &format!("r1-{}", Uuid::new_v4())).await;
+        tx = TransactionRepository::update_status(&pool, tx.id, TransactionStatus::Posted, None)
+            .await
+            .unwrap();
+
+        let out = AccountService::resolve_immediate_ledger_post(&pool, tx.clone())
+            .await
+            .unwrap();
+        match out {
+            ImmediateLedgerOutcome::ReturnWithoutPost(t) => assert_eq!(t.status, TransactionStatus::Posted),
+            ImmediateLedgerOutcome::Post(_) => panic!("expected short-circuit"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_posting_in_memory_returns_without_claim() {
+        let (_c, pool) = migrated_pool().await;
+        let org = Uuid::new_v4();
+        let mut tx = insert_pending(&pool, org, &format!("r2-{}", Uuid::new_v4())).await;
+        tx.status = TransactionStatus::Posting;
+
+        let out = AccountService::resolve_immediate_ledger_post(&pool, tx)
+            .await
+            .unwrap();
+        match out {
+            ImmediateLedgerOutcome::ReturnWithoutPost(t) => assert_eq!(t.status, TransactionStatus::Posting),
+            ImmediateLedgerOutcome::Post(_) => panic!("expected short-circuit"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_failed_returns_without_claim() {
+        let (_c, pool) = migrated_pool().await;
+        let org = Uuid::new_v4();
+        let mut tx = insert_pending(&pool, org, &format!("r3-{}", Uuid::new_v4())).await;
+        tx = TransactionRepository::update_status(&pool, tx.id, TransactionStatus::Failed, Some("x"))
+            .await
+            .unwrap();
+
+        let out = AccountService::resolve_immediate_ledger_post(&pool, tx.clone())
+            .await
+            .unwrap();
+        match out {
+            ImmediateLedgerOutcome::ReturnWithoutPost(t) => assert_eq!(t.status, TransactionStatus::Failed),
+            ImmediateLedgerOutcome::Post(_) => panic!("expected short-circuit"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_pending_wins_claim() {
+        let (_c, pool) = migrated_pool().await;
+        let org = Uuid::new_v4();
+        let tx = insert_pending(&pool, org, &format!("r4-{}", Uuid::new_v4())).await;
+
+        let out = AccountService::resolve_immediate_ledger_post(&pool, tx)
+            .await
+            .unwrap();
+        match out {
+            ImmediateLedgerOutcome::Post(t) => assert_eq!(t.status, TransactionStatus::Posting),
+            ImmediateLedgerOutcome::ReturnWithoutPost(_) => panic!("expected claim"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_pending_loses_race_returns_current_row() {
+        let (_c, pool) = migrated_pool().await;
+        let org = Uuid::new_v4();
+        let tx = insert_pending(&pool, org, &format!("r5-{}", Uuid::new_v4())).await;
+        let _claimed_elsewhere =
+            TransactionRepository::try_claim_pending_for_post(&pool, tx.id)
+                .await
+                .unwrap()
+                .unwrap();
+
+        let out = AccountService::resolve_immediate_ledger_post(&pool, tx)
+            .await
+            .unwrap();
+        match out {
+            ImmediateLedgerOutcome::ReturnWithoutPost(t) => {
+                assert_eq!(t.status, TransactionStatus::Posting)
+            }
+            ImmediateLedgerOutcome::Post(_) => panic!("expected reload after lost claim"),
+        }
     }
 }

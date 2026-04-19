@@ -1,0 +1,27 @@
+# Repository settings: https://docs.codecov.com/docs/codecov-yaml
+# Validate: curl --data-binary @codecov.yml https://codecov.io/validate
+#
+# Add the Codecov upload token as a GitHub Actions secret named CODECOV_TOKEN
+# (Repository → Settings → Secrets and variables → Actions).
+
+codecov:
+  require_ci_to_pass: true
+
+coverage:
+  precision: 2
+  round: down
+  status:
+    project:
+      default:
+        target: 100%
+        threshold: 0%
+        if_not_found: failure
+    patch:
+      default:
+        target: 100%
+        threshold: 0%
+        if_not_found: failure
+
+comment:
+  layout: "reach,diff,flags,files,footer"
+  behavior: default

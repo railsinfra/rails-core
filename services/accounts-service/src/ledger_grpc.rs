@@ -1,16 +1,20 @@
+use std::sync::Arc;
 use std::time::Duration;
+
+use tokio::sync::Mutex;
+use tonic::transport::{Channel, Endpoint};
 
 use crate::errors::AppError;
 use crate::grpc::ledger_proto::{
     ledger_service_client::LedgerServiceClient, Environment, GetAccountBalanceRequest,
     PostTransactionRequest,
 };
-use tonic::transport::Endpoint;
 
 #[derive(Clone)]
 pub struct LedgerGrpc {
     endpoint: String,
     timeout: Duration,
+    channel: Arc<Mutex<Option<Channel>>>,
 }
 
 impl LedgerGrpc {
@@ -19,11 +23,12 @@ impl LedgerGrpc {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .filter(|v| *v > 0)
-            .unwrap_or(10);
+            .unwrap_or(60);
 
         Self {
             endpoint,
             timeout: Duration::from_secs(timeout_secs),
+            channel: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -33,6 +38,22 @@ impl LedgerGrpc {
 
     pub fn timeout(&self) -> Duration {
         self.timeout
+    }
+
+    async fn connect_channel(&self) -> Result<Channel, AppError> {
+        let mut slot = self.channel.lock().await;
+        if let Some(ch) = slot.as_ref() {
+            return Ok(ch.clone());
+        }
+        let ch = Endpoint::from_shared(self.endpoint.clone())
+            .map_err(|e| AppError::Internal(format!("invalid LEDGER_GRPC_URL: {}", e)))?
+            .connect_timeout(self.timeout)
+            .timeout(self.timeout)
+            .connect()
+            .await
+            .map_err(|e| AppError::Internal(format!("ledger gRPC connect failed: {}", e)))?;
+        *slot = Some(ch.clone());
+        Ok(ch)
     }
 
     fn env_to_proto(environment: &str) -> Result<i32, AppError> {
@@ -60,13 +81,7 @@ impl LedgerGrpc {
     ) -> Result<(), AppError> {
         let env = Self::env_to_proto(environment)?;
 
-        let channel = Endpoint::from_shared(self.endpoint.clone())
-            .map_err(|e| AppError::Internal(format!("invalid LEDGER_GRPC_URL: {}", e)))?
-            .connect_timeout(self.timeout)
-            .timeout(self.timeout)
-            .connect()
-            .await
-            .map_err(|e| AppError::Internal(format!("ledger gRPC connect failed: {}", e)))?;
+        let channel = self.connect_channel().await?;
 
         let mut client = LedgerServiceClient::new(channel);
 
@@ -84,7 +99,7 @@ impl LedgerGrpc {
 
         let resp = tokio::time::timeout(
             self.timeout,
-            client.post_transaction(tonic::Request::new(req))
+            client.post_transaction(tonic::Request::new(req)),
         )
         .await
         .map_err(|_| AppError::Internal("ledger gRPC post timeout expired".to_string()))?
@@ -110,13 +125,7 @@ impl LedgerGrpc {
     ) -> Result<String, AppError> {
         let env = Self::env_to_proto(environment)?;
 
-        let channel = Endpoint::from_shared(self.endpoint.clone())
-            .map_err(|e| AppError::Internal(format!("invalid LEDGER_GRPC_URL: {}", e)))?
-            .connect_timeout(self.timeout)
-            .timeout(self.timeout)
-            .connect()
-            .await
-            .map_err(|e| AppError::Internal(format!("ledger gRPC connect failed: {}", e)))?;
+        let channel = self.connect_channel().await?;
 
         let mut client = LedgerServiceClient::new(channel);
 
@@ -129,7 +138,7 @@ impl LedgerGrpc {
 
         let resp = tokio::time::timeout(
             self.timeout,
-            client.get_account_balance(tonic::Request::new(req))
+            client.get_account_balance(tonic::Request::new(req)),
         )
         .await
         .map_err(|_| AppError::Internal("ledger gRPC get_account_balance timeout expired".to_string()))?
@@ -140,3 +149,240 @@ impl LedgerGrpc {
     }
 }
 
+#[cfg(test)]
+mod ledger_grpc_tests {
+    use super::*;
+    use crate::grpc::ledger_proto::ledger_service_server::{LedgerService, LedgerServiceServer};
+    use crate::grpc::ledger_proto::{
+        GetAccountBalanceRequest, GetAccountBalanceResponse, PostTransactionRequest,
+        PostTransactionResponse,
+    };
+    use std::sync::Mutex;
+    use tokio_stream::wrappers::TcpListenerStream;
+    use tonic::{transport::Server, Request, Response, Status};
+
+    static LEDGER_TIMEOUT_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[derive(Clone, Default)]
+    struct MockOk;
+
+    #[tonic::async_trait]
+    impl LedgerService for MockOk {
+        async fn post_transaction(
+            &self,
+            _req: Request<PostTransactionRequest>,
+        ) -> Result<Response<PostTransactionResponse>, Status> {
+            Ok(Response::new(PostTransactionResponse {
+                status: "posted".into(),
+                ledger_transaction_id: String::new(),
+                failure_reason: String::new(),
+            }))
+        }
+
+        async fn get_account_balance(
+            &self,
+            _req: Request<GetAccountBalanceRequest>,
+        ) -> Result<Response<GetAccountBalanceResponse>, Status> {
+            Ok(Response::new(GetAccountBalanceResponse {
+                balance: "-100".into(),
+                currency: "USD".into(),
+            }))
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct MockBizFail;
+
+    #[tonic::async_trait]
+    impl LedgerService for MockBizFail {
+        async fn post_transaction(
+            &self,
+            _req: Request<PostTransactionRequest>,
+        ) -> Result<Response<PostTransactionResponse>, Status> {
+            Ok(Response::new(PostTransactionResponse {
+                status: "rejected".into(),
+                ledger_transaction_id: String::new(),
+                failure_reason: "insufficient funds".into(),
+            }))
+        }
+
+        async fn get_account_balance(
+            &self,
+            _req: Request<GetAccountBalanceRequest>,
+        ) -> Result<Response<GetAccountBalanceResponse>, Status> {
+            Ok(Response::new(GetAccountBalanceResponse {
+                balance: "0".into(),
+                currency: "USD".into(),
+            }))
+        }
+    }
+
+    async fn ledger_base_url(mock: impl LedgerService + Send + Sync + 'static + Clone) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let incoming = TcpListenerStream::new(listener);
+        tokio::spawn(async move {
+            Server::builder()
+                .add_service(LedgerServiceServer::new(mock))
+                .serve_with_incoming(incoming)
+                .await
+                .ok();
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        format!("http://{}", addr)
+    }
+
+    fn sample_post_args() -> (
+        uuid::Uuid,
+        String,
+        String,
+        String,
+        i64,
+        String,
+        uuid::Uuid,
+        String,
+        String,
+    ) {
+        let org = uuid::Uuid::new_v4();
+        let ext = uuid::Uuid::new_v4();
+        (
+            org,
+            "sandbox".to_string(),
+            ext.to_string(),
+            ext.to_string(),
+            1,
+            "USD".to_string(),
+            ext,
+            "idem".to_string(),
+            "corr".to_string(),
+        )
+    }
+
+    #[tokio::test]
+    async fn post_and_balance_reuse_cached_channel() {
+        let url = ledger_base_url(MockOk::default()).await;
+        let client = LedgerGrpc::new(url);
+        let (org, env, src, dst, amt, cur, ext, idem, corr) = sample_post_args();
+        client
+            .post_transaction(
+                org,
+                &env,
+                src.clone(),
+                dst.clone(),
+                amt,
+                cur.clone(),
+                ext,
+                idem.clone(),
+                corr.clone(),
+            )
+            .await
+            .unwrap();
+        client
+            .post_transaction(
+                org,
+                &env,
+                src,
+                dst,
+                amt,
+                cur,
+                ext,
+                idem,
+                corr,
+            )
+            .await
+            .unwrap();
+        let bal = client
+            .get_account_balance(org, &env, ext, "USD")
+            .await
+            .unwrap();
+        assert_eq!(bal, "-100");
+        let _ = client.endpoint();
+        assert_eq!(client.timeout().as_secs(), 60);
+    }
+
+    #[tokio::test]
+    async fn post_non_posted_status_returns_business_error() {
+        let url = ledger_base_url(MockBizFail::default()).await;
+        let client = LedgerGrpc::new(url);
+        let (org, env, src, dst, amt, cur, ext, idem, corr) = sample_post_args();
+        let err = client
+            .post_transaction(org, &env, src, dst, amt, cur, ext, idem, corr)
+            .await
+            .unwrap_err();
+        let msg = format!("{}", err);
+        assert!(msg.contains("ledger post failed"), "{}", msg);
+    }
+
+    #[tokio::test]
+    async fn invalid_environment_is_validation_error() {
+        let url = ledger_base_url(MockOk::default()).await;
+        let client = LedgerGrpc::new(url);
+        let (org, _env, src, dst, amt, cur, ext, idem, corr) = sample_post_args();
+        let err = client
+            .post_transaction(
+                org,
+                "invalid-env",
+                src,
+                dst,
+                amt,
+                cur,
+                ext,
+                idem,
+                corr,
+            )
+            .await
+            .unwrap_err();
+        assert!(format!("{}", err).contains("invalid environment"));
+    }
+
+    #[tokio::test]
+    async fn connect_refused_surfaces_internal_error() {
+        let client = LedgerGrpc::new("http://127.0.0.1:9".to_string());
+        let (org, env, src, dst, amt, cur, ext, idem, corr) = sample_post_args();
+        let err = client
+            .post_transaction(org, &env, src, dst, amt, cur, ext, idem, corr)
+            .await
+            .unwrap_err();
+        let s = format!("{}", err);
+        assert!(
+            s.contains("ledger gRPC connect failed") || s.contains("ledger gRPC post failed"),
+            "{}",
+            s
+        );
+    }
+
+    #[test]
+    fn invalid_ledger_url_from_shared_errors_on_connect() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let client = LedgerGrpc::new("not a valid uri \0 scheme".to_string());
+            let (org, env, src, dst, amt, cur, ext, idem, corr) = sample_post_args();
+            let err = client
+                .post_transaction(org, &env, src, dst, amt, cur, ext, idem, corr)
+                .await
+                .unwrap_err();
+            assert!(format!("{}", err).contains("invalid LEDGER_GRPC_URL"));
+        });
+    }
+
+    #[tokio::test]
+    async fn custom_timeout_from_env() {
+        let _g = LEDGER_TIMEOUT_ENV_LOCK.lock().unwrap();
+        std::env::set_var("LEDGER_GRPC_TIMEOUT_SECS", "42");
+        let client = LedgerGrpc::new("http://127.0.0.1:9".to_string());
+        assert_eq!(client.timeout().as_secs(), 42);
+        std::env::remove_var("LEDGER_GRPC_TIMEOUT_SECS");
+    }
+
+    #[tokio::test]
+    async fn invalid_timeout_env_uses_default_sixty() {
+        let _g = LEDGER_TIMEOUT_ENV_LOCK.lock().unwrap();
+        std::env::set_var("LEDGER_GRPC_TIMEOUT_SECS", "0");
+        let client = LedgerGrpc::new("http://127.0.0.1:9".to_string());
+        assert_eq!(client.timeout().as_secs(), 60);
+        std::env::set_var("LEDGER_GRPC_TIMEOUT_SECS", "not-a-number");
+        let client2 = LedgerGrpc::new("http://127.0.0.1:9".to_string());
+        assert_eq!(client2.timeout().as_secs(), 60);
+        std::env::remove_var("LEDGER_GRPC_TIMEOUT_SECS");
+    }
+}
