@@ -91,6 +91,44 @@ jobs:
           working-directory: services/ledger-service
       - run: bundle exec rails db:test:prepare test
 
+  sonarqube:
+    name: SonarQube
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      RUST_VERSION: stable
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            services/users-service -> target
+            services/accounts-service -> target
+
+      - name: Run Rust tests (users-service)
+        working-directory: services/users-service
+        run: cargo test --locked
+
+      - name: Run Rust tests (accounts-service)
+        working-directory: services/accounts-service
+        run: cargo test --locked
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
   docker-builds:
     name: Dockerfile build (${{ matrix.service }})
     runs-on: ubuntu-latest
