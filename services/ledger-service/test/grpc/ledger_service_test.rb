@@ -123,6 +123,23 @@ class LedgerServiceTest < ActiveSupport::TestCase
     assert_match(/idempotency_key/i, resp.failure_reason)
   end
 
+  test "post_transaction fails when proto environment is invalid before other fields bind" do
+    req = Rails::Ledger::V1::PostTransactionRequest.new(
+      organization_id: SecureRandom.uuid,
+      environment: 99_999,
+      source_external_account_id: "a",
+      destination_external_account_id: "b",
+      amount: 1,
+      currency: "USD",
+      external_transaction_id: SecureRandom.uuid,
+      idempotency_key: SecureRandom.uuid,
+      correlation_id: ""
+    )
+    resp = LedgerService.new.post_transaction(req, nil)
+    assert_equal "failed", resp.status
+    assert_match(/Invalid environment/i, resp.failure_reason)
+  end
+
   test "post_transaction rejects empty source or destination" do
     svc = LedgerService.new
     base = {
@@ -220,6 +237,30 @@ class LedgerServiceTest < ActiveSupport::TestCase
           assert_equal "failed", resp.status
           assert_match(/boom/, resp.failure_reason)
         end
+      end
+    end
+  end
+
+  test "post_transaction rescue skips Sentry when with_scope is unavailable" do
+    orig_rt = Sentry.method(:respond_to?)
+    req = Rails::Ledger::V1::PostTransactionRequest.new(
+      organization_id: SecureRandom.uuid,
+      environment: Rails::Ledger::V1::Environment::SANDBOX,
+      source_external_account_id: "SYSTEM_CASH_CONTROL",
+      destination_external_account_id: "grpc_skip_sentry_reporting",
+      amount: 1,
+      currency: "USD",
+      external_transaction_id: SecureRandom.uuid,
+      idempotency_key: SecureRandom.uuid,
+      correlation_id: "c"
+    )
+    with_stub(Sentry, :respond_to?, proc do |sym, *rest|
+      sym == :with_scope ? false : orig_rt.call(sym, *rest)
+    end) do
+      with_stub(LedgerPoster, :post, proc { raise StandardError, "post_without_sentry" }) do
+        resp = LedgerService.new.post_transaction(req, nil)
+        assert_equal "failed", resp.status
+        assert_match(/post_without_sentry/, resp.failure_reason)
       end
     end
   end

@@ -302,4 +302,26 @@ class LedgerPosterComprehensiveTest < ActiveSupport::TestCase
       end
     end
   end
+
+  test "call rescue skips Sentry when with_scope is unavailable" do
+    orig_rt = Sentry.method(:respond_to?)
+    with_stub(Sentry, :respond_to?, proc do |sym, *rest|
+      sym == :with_scope ? false : orig_rt.call(sym, *rest)
+    end) do
+      with_stub(AccountBalance, :update_balance!, proc { raise StandardError, "bal skip sentry" }) do
+        err = assert_raises(LedgerPoster::PostingError) do
+          LedgerPoster.post_deposit(
+            organization_id: @org,
+            environment: "sandbox",
+            destination_external_account_id: "poster_skip_sentry",
+            amount: 2,
+            currency: "USD",
+            external_transaction_id: SecureRandom.uuid,
+            idempotency_key: SecureRandom.uuid
+          )
+        end
+        assert_match(/bal skip sentry/, err.message)
+      end
+    end
+  end
 end

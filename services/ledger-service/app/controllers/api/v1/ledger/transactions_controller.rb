@@ -107,13 +107,13 @@ module Api
             
             # Convert to UUID if it's a string
             @organization_id = @organization_id.to_s
-          rescue JWT::DecodeError => e
-            Rails.logger.error("JWT decode error: #{e.class}: #{e.message}")
-            render json: { error: "Invalid token: #{e.message}" }, status: :unauthorized
-            return
           rescue JWT::ExpiredSignature => e
             Rails.logger.error("JWT expired: #{e.message}")
             render json: { error: 'Token has expired' }, status: :unauthorized
+            return
+          rescue JWT::DecodeError => e
+            Rails.logger.error("JWT decode error: #{e.class}: #{e.message}")
+            render json: { error: "Invalid token: #{e.message}" }, status: :unauthorized
             return
           rescue => e
             Rails.logger.error("Unexpected authentication error: #{e.class}: #{e.message}")
@@ -123,28 +123,9 @@ module Api
         end
 
         def set_organization_and_environment
-          # Get environment from JWT or header
-          auth_header = request.headers['Authorization']
-          token = auth_header&.split(' ')&.last if auth_header
-          
-          if token
-            begin
-              require 'jwt'
-              secret = ENV.fetch('JWT_SECRET', 'dev_secret')
-              decoded = JWT.decode(token, secret, true, algorithm: 'HS256')
-              payload = decoded.first
-              
-              # Try to get environment from JWT env field (which is environment_id)
-              # For now, we'll use a header to specify sandbox vs production
-              # In the future, we could look up the environment type from the users service
-              @environment = request.headers['X-Environment']&.downcase || 'sandbox'
-            rescue
-              @environment = request.headers['X-Environment']&.downcase || 'sandbox'
-            end
-          else
-            @environment = request.headers['X-Environment']&.downcase || 'sandbox'
-          end
-          
+          # Ledger API uses X-Environment for sandbox vs production (JWT carries organization only).
+          @environment = request.headers['X-Environment']&.downcase || 'sandbox'
+
           # Validate environment
           unless %w[sandbox production].include?(@environment)
             render json: { error: 'Invalid environment. Must be sandbox or production' }, status: :bad_request

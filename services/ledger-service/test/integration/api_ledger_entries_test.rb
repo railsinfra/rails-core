@@ -97,21 +97,22 @@ class ApiLedgerEntriesTest < ActionDispatch::IntegrationTest
     end
   end
 
-  test "entries index falls back to x-environment when jwt decode fails in set_organization" do
-    calls = 0
-    orig = JWT.method(:decode)
-    with_stub(JWT, :decode, proc do |*args, **kwargs|
-      calls += 1
-      raise JWT::DecodeError, "second phase" if calls >= 2
+  test "entries index rejects expired jwt" do
+    token = JWT.encode(
+      { "business_id" => @organization_id, "exp" => Time.now.to_i - 120 },
+      ENV.fetch("JWT_SECRET", "dev_secret"),
+      "HS256"
+    )
+    get "/api/v1/ledger/entries",
+        headers: { "Authorization" => "Bearer #{token}", "X-Environment" => "sandbox" }
+    assert_response :unauthorized
+    assert_match(/expired/i, JSON.parse(response.body)["error"])
+  end
 
-      orig.call(*args, **kwargs)
-    end) do
-      get "/api/v1/ledger/entries",
-          headers: {
-            "Authorization" => "Bearer #{@token}",
-            "X-Environment" => "production"
-          }
-      assert_response :success
-    end
+  test "entries index rejects malformed jwt with decode error" do
+    get "/api/v1/ledger/entries",
+        headers: { "Authorization" => "Bearer not-a-jwt", "X-Environment" => "sandbox" }
+    assert_response :unauthorized
+    assert_match(/Invalid token/i, JSON.parse(response.body)["error"])
   end
 end

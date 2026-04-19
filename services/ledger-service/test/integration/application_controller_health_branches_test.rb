@@ -29,4 +29,13 @@ class ApplicationControllerHealthBranchesTest < ActionDispatch::IntegrationTest
       assert_equal "ok", body.dig("grpc", "status")
     end
   end
+
+  test "health marks grpc down when tcp returns without raising but is falsy" do
+    with_stub(Socket, :tcp, proc { |*_args, **_kwargs| false }) do
+      get "/health"
+      assert_response :success
+      body = JSON.parse(response.body)
+      assert_equal "down", body.dig("grpc", "status")
+    end
+  end
 end

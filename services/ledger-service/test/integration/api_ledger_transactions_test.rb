@@ -103,21 +103,4 @@ class ApiLedgerTransactionsTest < ActionDispatch::IntegrationTest
     assert body["entries"].is_a?(Array)
   end
 
-  test "transactions index falls back to x-environment when jwt decode fails in set_organization" do
-    calls = 0
-    orig = JWT.method(:decode)
-    with_stub(JWT, :decode, proc do |*args, **kwargs|
-      calls += 1
-      raise JWT::DecodeError, "second phase" if calls >= 2
-
-      orig.call(*args, **kwargs)
-    end) do
-      get "/api/v1/ledger/transactions",
-          headers: {
-            "Authorization" => "Bearer #{@token}",
-            "X-Environment" => "production"
-          }
-      assert_response :success
-    end
-  end
 end
