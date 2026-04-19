@@ -5,10 +5,9 @@
 ```bash
 git clone git@github.com:railsinfra/rails-core.git
 cd rails-core
-make bootstrap
 ```
 
-(`bootstrap` checks that every path in `config/services.json` exists — services are **vendored** in this repo, not submodules.)
+`make dev` runs the same layout check as `make bootstrap` (paths in `config/services.json` — services are **vendored** in this repo, not git submodules).
 
 ## 2. Environment
 
