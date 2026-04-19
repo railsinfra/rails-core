@@ -5,6 +5,16 @@ use std::time::Duration;
 
 use crate::routes::api::AppState;
 
+/// Shown at `GET /` (gateway: `GET /accounts/`) so the service root is not a bare 404.
+pub async fn service_root() -> Json<serde_json::Value> {
+    Json(json!({
+        "service": "accounts-api",
+        "health": "/health",
+        "api_base": "/api/v1",
+        "note": "Behind gateway use paths like /accounts/health. GET /api/v1/accounts requires header X-Environment (sandbox|production) and query user_id, organization_id, or admin_user_id."
+    }))
+}
+
 fn try_connect_ledger_grpc(endpoint: &str, timeout: Duration) -> bool {
     // Expect an HTTP/HTTPS-style endpoint (tonic Endpoint::from_shared),
     // e.g. "http://127.0.0.1:50053"

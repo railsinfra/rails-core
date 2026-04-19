@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::handlers::{
     accounts::*,
     transactions::{get_transaction, list_account_transactions, list_transactions},
-    health::health_check,
+    health::{health_check, service_root},
 };
 
 use crate::errors::AppError;
@@ -36,6 +36,7 @@ pub fn create_router(pool: PgPool, ledger_grpc: LedgerGrpc, users_grpc: UsersGrp
         users_grpc,
     };
     Router::<AppState>::new()
+        .route("/", get(service_root))
         .route("/health", get(health_check))
         .nest("/api/v1", create_api_routes())
         .layer(from_fn(correlation_id_middleware))
