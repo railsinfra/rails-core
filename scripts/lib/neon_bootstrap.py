@@ -20,7 +20,8 @@ from typing import Any
 
 from tabulate import tabulate
 
-NEON_API = "https://console.neon.tech/api/v2"
+NEON_CONSOLE_ORIGIN = "https://console.neon.tech"
+NEON_API = f"{NEON_CONSOLE_ORIGIN}/api/v2"
 
 # Placeholders from .env.example — treat as "not configured"
 _URL_INCOMPLETE_MARKERS = (
@@ -34,7 +35,6 @@ SERVICE_DBS: tuple[tuple[str, str], ...] = (
     ("ACCOUNTS_DATABASE_URL", "accounts-db"),
     ("LEDGER_DATABASE_URL", "ledger-db"),
 )
-
 
 def _neon_msg(msg: str) -> None:
     print(f"Neon: {msg}", file=sys.stderr, flush=True)
@@ -87,35 +87,64 @@ def urls_configured(env: dict[str, str]) -> bool:
     return True
 
 
-def mask_database_url(url: str) -> str:
-    """Hide password; keep host and database path for developer feedback."""
+def _bitly_shorten(long_url: str, access_token: str) -> str | None:
+    """Return a bit.ly (or configured domain) short link, or None on failure."""
+    body = json.dumps({"long_url": long_url}).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api-ssl.bitly.com/v4/shorten",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
     try:
-        parsed = urllib.parse.urlparse(url)
-        user = parsed.username or ""
-        host = parsed.hostname or ""
-        port = f":{parsed.port}" if parsed.port else ""
-        path = parsed.path or ""
-        tail = ""
-        if parsed.query:
-            q = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
-            # drop sensitive query bits if any
-            safe = {k: v for k, v in q.items() if k.lower() in {"sslmode", "channel_binding"}}
-            if safe:
-                tail = "?" + urllib.parse.urlencode(safe, doseq=True)
-        user_part = f"{user}:***" if user else "***"
-        return f"{parsed.scheme}://{user_part}@{host}{port}{path}{tail}"
-    except Exception:
-        return "postgresql://***:***@***"
+        with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310 — fixed Bitly API URL
+            raw = resp.read().decode("utf-8")
+        data = json.loads(raw) if raw else {}
+    except (urllib.error.URLError, json.JSONDecodeError, TimeoutError):
+        return None
+    if isinstance(data, dict):
+        link = data.get("link")
+        if isinstance(link, str) and link.startswith("http"):
+            return link
+    return None
 
 
-def _print_dev_credentials_table(rows: list[tuple[str, str]]) -> None:
-    """Pretty-print masked DB URLs as a bordered terminal table."""
+def shorten_https_url(url: str, bitly_token: str | None) -> str:
+    """If `url` is https and BITLY token is set, replace with a Bitly short link when possible."""
+    if not url or url == "—" or not url.startswith("https://"):
+        return url
+    token = (bitly_token or "").strip()
+    if not token:
+        return url
+    short = _bitly_shorten(url, token)
+    return short if short else url
+
+
+def neon_console_project_url(project_id: str) -> str:
+    """Neon Console project overview (deep link)."""
+    pid = urllib.parse.quote(project_id, safe="")
+    return f"{NEON_CONSOLE_ORIGIN}/app/projects/{pid}"
+
+
+def neon_console_branch_database_url(project_id: str, branch_id: str, database_name: str) -> str:
+    """Deep link to the branch; `database` query may pre-select DB in SQL Editor (ignored if unsupported)."""
+    pid = urllib.parse.quote(project_id, safe="")
+    bid = urllib.parse.quote(branch_id, safe="")
+    q = urllib.parse.urlencode({"database": database_name})
+    return f"{NEON_CONSOLE_ORIGIN}/app/projects/{pid}/branches/{bid}?{q}"
+
+
+def _print_dev_credentials_table(rows: list[tuple[str, str, str]]) -> None:
+    """Pretty-print Neon database names and console links as a bordered terminal table."""
     if not rows:
         return
     print(
         tabulate(
             rows,
-            headers=["Variable", "URL (masked)"],
+            headers=["Variable", "Neon database", "Neon console"],
             tablefmt="fancy_grid",
             stralign="left",
         )
@@ -147,9 +176,10 @@ def _request_json(
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310 — controlled Neon URL
                 raw = resp.read().decode("utf-8")
-                if not raw:
-                    return resp.status, None
-                return resp.status, json.loads(raw)
+                http_status = resp.status
+            if not raw:
+                return http_status, None
+            return http_status, json.loads(raw)
         except urllib.error.HTTPError as e:
             payload = e.read().decode("utf-8", errors="replace")
             try:
@@ -176,6 +206,7 @@ def _request_json(
 def find_project_id_by_name(api_key: str, name: str) -> str | None:
     """Exact name match via paginated GET /projects (no server-side `search` query)."""
     cursor: str | None = None
+    seen_cursors: set[str] = set()
     while True:
         q: dict[str, str] = {"limit": "100"}
         if cursor:
@@ -189,9 +220,21 @@ def find_project_id_by_name(api_key: str, name: str) -> str | None:
                 pid = p.get("id")
                 if isinstance(pid, str):
                     return pid
-        cursor = (data.get("pagination") or {}).get("cursor")
-        if not cursor:
+        raw_cursor = (data.get("pagination") or {}).get("cursor")
+        if not raw_cursor or not isinstance(raw_cursor, str):
             break
+        # Neon sometimes returns the same cursor with an empty batch; without a guard this loops forever.
+        if raw_cursor == cursor:
+            _neon_msg(
+                "list-projects pagination returned the same cursor again; "
+                "stopping search (project not found in this pass)."
+            )
+            break
+        if raw_cursor in seen_cursors:
+            _neon_msg("list-projects pagination repeated a cursor; stopping project search.")
+            break
+        seen_cursors.add(raw_cursor)
+        cursor = raw_cursor
     return None
 
 
@@ -574,14 +617,29 @@ def main() -> int:
         print("")
         print("These are your dev credentials. They are safe but auto-generated for this environment.")
         final = load_env_file_keys(repo_root)
-        cred_rows = [
-            (env_key, mask_database_url(u))
-            for env_key, _db in SERVICE_DBS
-            if (u := final.get(env_key, "").strip())
-        ]
+        project_id = final.get("RAILS_CORE_NEON_PROJECT_ID", "").strip()
+        branch_id = final.get("RAILS_CORE_NEON_BRANCH_ID", "").strip()
+        bitly = (
+            os.environ.get("BITLY_ACCESS_TOKEN", "").strip()
+            or final.get("BITLY_ACCESS_TOKEN", "").strip()
+        ) or None
+        cred_rows: list[tuple[str, str, str]] = []
+        for env_key, db_name in SERVICE_DBS:
+            u = final.get(env_key, "").strip()
+            if not u:
+                continue
+            if project_id and branch_id:
+                console_url = neon_console_branch_database_url(project_id, branch_id, db_name)
+                console_url = shorten_https_url(console_url, bitly)
+            else:
+                console_url = "—"
+            cred_rows.append((env_key, db_name, console_url))
         _print_dev_credentials_table(cred_rows)
         print("")
         print("Neon project:", project_name)
+        if project_id:
+            proj_console = neon_console_project_url(project_id)
+            print("Neon project (console):", shorten_https_url(proj_console, bitly))
         print("Compose can start; database URLs were written to .env (merged with your other variables).")
         return 0
 

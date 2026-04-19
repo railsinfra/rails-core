@@ -56,9 +56,13 @@ Services speak to each other on the Docker network; you normally **do not** need
 
 ### Stop the stack
 
-```bash
-make reset
-```
+
+| Command | What it does |
+|--------|----------------|
+| `make reset` | `docker compose down` (stops local containers; external DBs unchanged). |
+| `make reset-env`  | Rewrites `USERS_DATABASE_URL`, `ACCOUNTS_DATABASE_URL`, and `LEDGER_DATABASE_URL` in `.env` back to the placeholders from `.env.example`. Does **not** delete data in Neon. |
+| `make reset-neon` | Deletes the Neon **project** whose id is in `RAILS_CORE_NEON_PROJECT_ID` in `.env`, clears those database URL lines to placeholders, and strips Neon metadata keys. **Requires** `CONFIRM_PURGE_NEON=yes` in the environment, for example: `CONFIRM_PURGE_NEON=yes make reset-neon`. |
+
 
 ### Optional checks
 
@@ -159,11 +163,11 @@ rails-core/
 ├── scripts/
 │   ├── bootstrap.sh
 │   ├── seed.sh
-│   ├── reset.sh
+│   ├── reset.sh              # compose down; --clear-env / --purge-neon (see README)
 │   ├── verify-layout.sh
 │   ├── health-check.sh
 │   ├── deploy-railway.sh     # optional Railway helper (Rust services)
-│   └── lib/                  # read_manifest.py, health_check.py
+│   └── lib/                  # neon_bootstrap.py, health_check.py, …
 │
 ├── infra/
 │   ├── docker/
