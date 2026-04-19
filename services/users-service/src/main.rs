@@ -68,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
             .init();
     }
     tracing::info!("Loaded configuration");
-    tracing::info!("  DATABASE_URL: {}", mask_url(&config.database_url));
+    tracing::info!("  DATABASE_URL: configured (value omitted; see repository .env)");
     tracing::info!("  SERVER_ADDR: {}", config.server_addr);
     tracing::info!("  ACCOUNTS_GRPC_URL: {}", config.accounts_grpc_url);
     
@@ -162,12 +162,4 @@ async fn main() -> anyhow::Result<()> {
 
     tokio::try_join!(http_task, grpc_task)?;
     Ok(())
-}
-
-fn mask_url(url: &str) -> String {
-    if let Some(at_pos) = url.find('@') {
-        format!("postgresql://***@{}", &url[at_pos+1..])
-    } else {
-        url.to_string()
-    }
 }
