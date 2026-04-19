@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package rails.core.users.v1;
+
+option java_multiple_files = true;
+option java_package = "rails.core.users.v1";
+option go_package = "github.com/railsinfra/proto/gen/go/rails/core/users/v1;usersv1";
+
+// v1 — source of truth for cross-service contracts (users / identity / tenants).
+service UsersV1 {
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1;
+}

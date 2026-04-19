@@ -1,0 +1,9 @@
+[submodule "services/users-service"]
+	path = services/users-service
+	url = git@github.com:sibabale/rails-users.git
+[submodule "services/accounts-service"]
+	path = services/accounts-service
+	url = git@github.com:sibabale/rails-accounts.git
+[submodule "services/ledger-service"]
+	path = services/ledger-service
+	url = git@github.com:sibabale/rails-ledger.git

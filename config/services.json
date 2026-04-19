@@ -1,0 +1,28 @@
+{
+  "version": 2,
+  "tracking": "https://linear.app/railsinfra/issue/RAI-5/design-monorepo-architecture-for-rails-core-services",
+  "description": "Backend service submodules (paths relative to this repository root).",
+  "services": [
+    {
+      "id": "users-service",
+      "path": "services/users-service",
+      "language": "rust",
+      "summary": "Identity, tenants, authentication",
+      "ports": { "http": 8080, "grpc": 50051 }
+    },
+    {
+      "id": "accounts-service",
+      "path": "services/accounts-service",
+      "language": "rust",
+      "summary": "Accounts, balances, transfer orchestration",
+      "ports": { "http": 8081, "grpc": 50052 }
+    },
+    {
+      "id": "ledger-service",
+      "path": "services/ledger-service",
+      "language": "ruby",
+      "summary": "Double-entry ledger, financial finality",
+      "ports": { "http": 3000, "grpc": 50053 }
+    }
+  ]
+}

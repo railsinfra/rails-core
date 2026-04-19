@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package rails.core.ledger.v1;
+
+option java_multiple_files = true;
+option java_package = "rails.core.ledger.v1";
+option go_package = "github.com/railsinfra/proto/gen/go/rails/core/ledger/v1;ledgerv1";
+
+// v1 — immutable financial ledger; transaction finality.
+service LedgerV1 {
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1;
+}
