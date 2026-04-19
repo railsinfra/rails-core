@@ -16,8 +16,9 @@ services:
       - ledger-service
 
   users-service:
-    # 1.85+ required: transitive crates may use Cargo.toml edition 2024 (e.g. home).
-    image: rust:1.85-bookworm
+    # home crate (transitive) requires rustc 1.88+; keep in sync with accounts-service.
+    # prost-build needs `protoc` (protobuf-compiler) at compile time.
+    image: rust:1.88-bookworm
     working_dir: /app
     volumes:
       - ./services/users-service:/app
@@ -27,13 +28,13 @@ services:
       GRPC_PORT: "50051"
       ACCOUNTS_GRPC_URL: http://accounts-service:9090
       RUST_LOG: ${RUST_LOG:-info}
-    command: bash -c "cargo run --release"
+    command: bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y -qq protobuf-compiler && cargo run --release"
     expose:
       - "8080"
       - "50051"
 
   accounts-service:
-    image: rust:1.85-bookworm
+    image: rust:1.88-bookworm
     working_dir: /app
     volumes:
       - ./services/accounts-service:/app
@@ -44,7 +45,7 @@ services:
       USERS_GRPC_URL: http://users-service:50051
       LEDGER_GRPC_URL: http://ledger-service:50053
       RUST_LOG: ${RUST_LOG:-info}
-    command: bash -c "cargo run --release"
+    command: bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y -qq protobuf-compiler && cargo run --release"
     expose:
       - "8080"
       - "9090"
@@ -59,7 +60,8 @@ services:
       RAILS_ENV: development
       PORT: "3000"
       GRPC_PORT: "50053"
-    command: bash -c "bundle install && bundle exec rails server -b 0.0.0.0 -p 3000"
+    # ledger-db may be empty after Neon bootstrap; create tables before gRPC/Puma.
+    command: bash -c "bundle install && bundle exec rails db:prepare && bundle exec rails server -b 0.0.0.0 -p 3000"
     expose:
       - "3000"
       - "50053"

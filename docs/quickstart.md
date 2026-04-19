@@ -13,9 +13,9 @@ cd rails-core
 
 ```bash
 cp .env.example .env
-# Edit .env — set USERS_DATABASE_URL, ACCOUNTS_DATABASE_URL, LEDGER_DATABASE_URL
-# (Hosted Postgres / Neon URLs are fine; no local Postgres container in compose.)
 ```
+
+Set `NEON_API_KEY` in `.env` ([Neon API keys](https://neon.tech/docs/manage/api-keys)) so bootstrap can fill the database URLs, **or** set `USERS_DATABASE_URL`, `ACCOUNTS_DATABASE_URL`, and `LEDGER_DATABASE_URL` manually. Optional Neon-related keys are listed in `.env.example`.
 
 ## 3. Run everything
 

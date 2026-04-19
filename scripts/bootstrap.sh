@@ -11,27 +11,20 @@ if ! git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! python3 -c "import tabulate" 2>/dev/null; then
+  python3 -m pip install -q -r "$SCRIPT_DIR/lib/requirements.txt"
+fi
+
 echo "Repository root: $REPO_ROOT"
 echo "Checking vendored services from $MANIFEST"
-
-missing=0
-while IFS= read -r rel; do
-  [[ -z "$rel" ]] && continue
-  if [[ ! -d "$REPO_ROOT/$rel" ]]; then
-    echo "MISSING: $rel" >&2
-    missing=$((missing + 1))
-    continue
-  fi
-  echo "  OK $rel"
-done < <(python3 "$SCRIPT_DIR/lib/read_manifest.py" "$MANIFEST")
-
-if [[ "$missing" -gt 0 ]]; then
+if ! python3 "$SCRIPT_DIR/lib/print_vendor_services_check.py" "$REPO_ROOT" "$MANIFEST"; then
   exit 1
 fi
 
-if [[ ! -f "$REPO_ROOT/.env" ]]; then
-  echo ""
-  echo "Tip: cp .env.example .env and set database URLs."
+echo ""
+echo "Database environment (Neon or existing .env)..."
+if ! python3 "$SCRIPT_DIR/lib/neon_bootstrap.py" --repo-root "$REPO_ROOT"; then
+  exit 1
 fi
 
 echo "Done."
