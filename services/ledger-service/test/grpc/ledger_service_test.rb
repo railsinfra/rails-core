@@ -242,7 +242,6 @@ class LedgerServiceTest < ActiveSupport::TestCase
   end
 
   test "post_transaction rescue skips Sentry when with_scope is unavailable" do
-    orig_rt = Sentry.method(:respond_to?)
     req = Rails::Ledger::V1::PostTransactionRequest.new(
       organization_id: SecureRandom.uuid,
       environment: Rails::Ledger::V1::Environment::SANDBOX,
@@ -254,9 +253,7 @@ class LedgerServiceTest < ActiveSupport::TestCase
       idempotency_key: SecureRandom.uuid,
       correlation_id: "c"
     )
-    with_stub(Sentry, :respond_to?, proc do |*a, **k|
-      a.first == :with_scope ? false : orig_rt.call(*a, **k)
-    end) do
+    without_sentry_with_scope_method do
       with_stub(LedgerPoster, :post, proc { raise StandardError, "post_without_sentry" }) do
         resp = LedgerService.new.post_transaction(req, nil)
         assert_equal "failed", resp.status

@@ -20,4 +20,15 @@ module TestStubbing
   ensure
     owner.define_method(method_name, meth)
   end
+
+  # Temporarily removes Sentry.with_scope so `Sentry.respond_to?(:with_scope)` is false, matching a
+  # misconfigured client without stubbing `respond_to?` (which breaks Sentry and Ruby internals).
+  def without_sentry_with_scope_method
+    sc = Sentry.singleton_class
+    orig = Sentry.method(:with_scope)
+    sc.remove_method(:with_scope)
+    yield
+  ensure
+    sc.define_method(:with_scope, orig)
+  end
 end
