@@ -1,0 +1,5 @@
+.env/
+.env
+.env.*
+/target
+.DS_Store

@@ -8,7 +8,7 @@ cd rails-core
 make bootstrap
 ```
 
-(`bootstrap` runs `git submodule update --init` for all services listed in `config/services.json`.)
+(`bootstrap` checks that every path in `config/services.json` exists — services are **vendored** in this repo, not submodules.)
 
 ## 2. Environment
 

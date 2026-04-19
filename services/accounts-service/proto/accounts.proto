@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package rails.accounts.v1;
+
+option java_multiple_files = true;
+option java_package = "com.rails.accounts.v1";
+option java_outer_classname = "AccountsProto";
+
+service AccountsService {
+  rpc GetAccountBalance(GetAccountBalanceRequest) returns (GetAccountBalanceResponse);
+}
+
+enum Environment {
+  ENVIRONMENT_UNSPECIFIED = 0;
+  SANDBOX = 1;
+  PRODUCTION = 2;
+}
+
+enum AccountType {
+  ACCOUNT_TYPE_UNSPECIFIED = 0;
+  CHECKING = 1;
+  SAVING = 2;
+}
+
+message GetAccountBalanceRequest {
+  string account_id = 1;
+}
+
+message GetAccountBalanceResponse {
+  string account_id = 1;
+  string balance = 2;
+  string currency = 3;
+}

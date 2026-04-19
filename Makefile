@@ -7,7 +7,7 @@ REPO_ROOT := $(abspath $(RAILS_CORE))
 help:
 	@echo "rails-core (repo root: $(REPO_ROOT))"
 	@echo "  make dev        — Docker Compose: nginx :8080 + all services"
-	@echo "  make bootstrap  — git submodule init for users/accounts/ledger services"
+	@echo "  make bootstrap  — verify vendored service directories exist"
 	@echo "  make verify     — assert service directories exist"
 	@echo "  make health     — HTTP checks via gateway :8080 (compose must be up)"
 	@echo "  make reset      — docker compose down"

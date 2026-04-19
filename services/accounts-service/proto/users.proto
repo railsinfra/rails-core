@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package rails.users.v1;
+
+option java_multiple_files = true;
+option java_package = "com.rails.users.v1";
+option java_outer_classname = "UsersProto";
+
+service UsersService {
+  rpc ValidateApiKey(ValidateApiKeyRequest) returns (ValidateApiKeyResponse);
+}
+
+message ValidateApiKeyRequest {
+  string api_key = 1;
+  string environment = 2;  // "sandbox" or "production"
+}
+
+message ValidateApiKeyResponse {
+  string business_id = 1;
+  string environment_id = 2;
+  string admin_user_id = 3;  // One admin user in this business/environment for account hierarchy
+}

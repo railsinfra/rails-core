@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verify each path in config/services.json exists under the repo root (submodule checkout).
+# Verify each path in config/services.json exists (vendored service directories).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,14 +20,11 @@ while IFS= read -r rel; do
     errors=$((errors + 1))
     continue
   fi
-  if [[ ! -e "$full/.git" ]]; then
-    echo "WARN: no .git under (expected submodule): $rel" >&2
-  fi
   echo "OK $rel"
 done < <(python3 "$SCRIPT_DIR/lib/read_manifest.py" "$MANIFEST")
 
 if [[ "$errors" -gt 0 ]]; then
-  echo "verify-layout: $errors path(s) missing. Run: make bootstrap" >&2
+  echo "verify-layout: $errors path(s) missing." >&2
   exit 1
 fi
 echo "All declared paths present."

@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package rails.ledger.v1;
+
+option java_multiple_files = true;
+option java_package = "com.rails.ledger.v1";
+option java_outer_classname = "LedgerProto";
+
+service LedgerService {
+  rpc PostTransaction(PostTransactionRequest) returns (PostTransactionResponse);
+  rpc GetAccountBalance(GetAccountBalanceRequest) returns (GetAccountBalanceResponse);
+}
+
+enum Environment {
+  ENVIRONMENT_UNSPECIFIED = 0;
+  SANDBOX = 1;
+  PRODUCTION = 2;
+}
+
+message PostTransactionRequest {
+  string organization_id = 1;
+  Environment environment = 2;
+  string source_external_account_id = 3;
+  string destination_external_account_id = 4;
+  int64 amount = 5;
+  string currency = 6;
+  string external_transaction_id = 7;
+  string idempotency_key = 8;
+  string correlation_id = 9;
+}
+
+message PostTransactionResponse {
+  string status = 1;
+  string ledger_transaction_id = 2;
+  string failure_reason = 3;
+}
+
+message GetAccountBalanceRequest {
+  string organization_id = 1;
+  Environment environment = 2;
+  string external_account_id = 3;
+  string currency = 4;
+}
+
+message GetAccountBalanceResponse {
+  string balance = 1;
+  string currency = 2;
+}

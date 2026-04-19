@@ -1,0 +1,12 @@
+# Local env (use .env.example as template)
+.env
+
+# Rust build outputs (vendored services)
+target/
+**/target/
+**/*.rs.bk
+
+# Rails (ledger)
+services/ledger-service/log/
+services/ledger-service/tmp/
+services/ledger-service/storage/
