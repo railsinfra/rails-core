@@ -33,3 +33,16 @@ pub async fn init(config: &Config) -> Result<GrpcClients, tonic::transport::Erro
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::init;
+    use crate::config::Config;
+
+    #[tokio::test]
+    async fn init_treats_connection_refused_as_optional_accounts_client() {
+        let cfg = Config::test_stub_with_accounts_grpc("http://127.0.0.1:1".into());
+        let clients = init(&cfg).await.expect("init returns Ok even when connect fails");
+        assert!(clients.accounts_client.is_none());
+    }
+}

@@ -1,0 +1,56 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+class LedgerTransactionTest < ActiveSupport::TestCase
+  test "find_existing returns nil when no row" do
+    assert_nil LedgerTransaction.find_existing(
+      organization_id: SecureRandom.uuid,
+      environment: "sandbox",
+      idempotency_key: SecureRandom.uuid
+    )
+  end
+
+  test "mark_as_posted clears failure_reason" do
+    org = SecureRandom.uuid
+    tx = LedgerTransaction.create!(
+      organization_id: org,
+      environment: "sandbox",
+      external_transaction_id: SecureRandom.uuid,
+      status: "pending",
+      idempotency_key: SecureRandom.uuid,
+      failure_reason: "prior"
+    )
+    tx.mark_as_posted!
+    tx.reload
+    assert_equal "posted", tx.status
+    assert_nil tx.failure_reason
+  end
+
+  test "mark_as_failed sets status and reason" do
+    org = SecureRandom.uuid
+    tx = LedgerTransaction.create!(
+      organization_id: org,
+      environment: "production",
+      external_transaction_id: SecureRandom.uuid,
+      status: "pending",
+      idempotency_key: SecureRandom.uuid
+    )
+    tx.mark_as_failed!("boom")
+    tx.reload
+    assert_equal "failed", tx.status
+    assert_equal "boom", tx.failure_reason
+  end
+
+  test "validations reject invalid environment" do
+    tx = LedgerTransaction.new(
+      organization_id: SecureRandom.uuid,
+      environment: "staging",
+      external_transaction_id: SecureRandom.uuid,
+      status: "pending",
+      idempotency_key: SecureRandom.uuid
+    )
+    assert_not tx.valid?
+    assert_includes tx.errors[:environment], "is not included in the list"
+  end
+end

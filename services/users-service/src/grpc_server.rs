@@ -12,6 +12,25 @@ pub mod proto {
 use proto::users_service_server::{UsersService as UsersServiceTrait, UsersServiceServer};
 use proto::{ValidateApiKeyRequest, ValidateApiKeyResponse};
 
+pub(crate) fn validate_api_key_request_inputs(
+    api_key: &str,
+    environment: &str,
+) -> Result<(String, String), Status> {
+    let api_key_plain = api_key.trim();
+    let environment = environment.trim().to_lowercase();
+
+    if api_key_plain.is_empty() {
+        return Err(Status::invalid_argument("api_key is required"));
+    }
+    if environment != "sandbox" && environment != "production" {
+        return Err(Status::invalid_argument(
+            "environment must be 'sandbox' or 'production'",
+        ));
+    }
+
+    Ok((api_key_plain.to_string(), environment))
+}
+
 #[derive(Clone)]
 pub struct UsersGrpcService {
     pool: PgPool,
@@ -34,19 +53,10 @@ impl UsersServiceTrait for UsersGrpcService {
         request: Request<ValidateApiKeyRequest>,
     ) -> Result<Response<ValidateApiKeyResponse>, Status> {
         let req = request.into_inner();
-        let api_key_plain = req.api_key.trim();
-        let environment = req.environment.trim().to_lowercase();
+        let (api_key_plain, environment) =
+            validate_api_key_request_inputs(&req.api_key, &req.environment)?;
 
-        if api_key_plain.is_empty() {
-            return Err(Status::invalid_argument("api_key is required"));
-        }
-        if environment != "sandbox" && environment != "production" {
-            return Err(Status::invalid_argument(
-                "environment must be 'sandbox' or 'production'",
-            ));
-        }
-
-        let key_hash = auth::hash_api_key(api_key_plain).map_err(|e| Status::internal(e.to_string()))?;
+        let key_hash = auth::hash_api_key(&api_key_plain).map_err(|e| Status::internal(e.to_string()))?;
 
         let rec = sqlx::query(
             "SELECT k.id, k.business_id, k.revoked_at, k.status FROM api_keys k WHERE k.key_hash = $1",
@@ -69,7 +79,7 @@ impl UsersServiceTrait for UsersGrpcService {
             "SELECT id FROM environments WHERE business_id = $1 AND type = $2 AND status = 'active'",
         )
         .bind(&business_id)
-        .bind(&environment)
+        .bind(environment.as_str())
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| Status::internal(e.to_string()))?
@@ -94,5 +104,30 @@ impl UsersServiceTrait for UsersGrpcService {
             environment_id: environment_id.to_string(),
             admin_user_id: admin_user_id.to_string(),
         }))
+    }
+}
+
+#[cfg(test)]
+mod validate_api_key_input_tests {
+    use super::validate_api_key_request_inputs;
+    use tonic::Code;
+
+    #[test]
+    fn accepts_trimmed_sandbox() {
+        let (k, e) = validate_api_key_request_inputs("  abc  ", "  SANDBOX ").expect("ok");
+        assert_eq!(k, "abc");
+        assert_eq!(e, "sandbox");
+    }
+
+    #[test]
+    fn rejects_empty_key() {
+        let err = validate_api_key_request_inputs("  ", "sandbox").expect_err("err");
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[test]
+    fn rejects_bad_environment() {
+        let err = validate_api_key_request_inputs("k", "staging").expect_err("err");
+        assert_eq!(err.code(), Code::InvalidArgument);
     }
 }
