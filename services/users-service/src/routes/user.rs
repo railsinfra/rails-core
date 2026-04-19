@@ -154,7 +154,13 @@ pub async fn me(
 
 #[cfg(test)]
 mod tests {
+    use super::normalize_email;
     use crate::error::DUPLICATE_EMAIL_MESSAGE;
+
+    #[test]
+    fn normalize_email_trims_and_lowercases() {
+        assert_eq!(normalize_email("  User@EXAMPLE.com \t"), "user@example.com");
+    }
 
     #[test]
     fn duplicate_email_message_is_user_friendly_and_stable() {

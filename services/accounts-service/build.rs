@@ -5,7 +5,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Users service client (ValidateApiKey for holder-based account creation)
     tonic_build::configure()
         .build_client(true)
-        .build_server(false)
+        .build_server(true)
         .compile_protos(&["proto/users.proto"], &["proto"])?;
     Ok(())
 }

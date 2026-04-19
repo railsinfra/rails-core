@@ -55,3 +55,29 @@ impl IntoResponse for AppError {
         (status, axum::Json(body)).into_response()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::AppError;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    #[test]
+    fn into_response_status_codes() {
+        let cases: Vec<(AppError, StatusCode)> = vec![
+            (AppError::Unauthorized, StatusCode::UNAUTHORIZED),
+            (AppError::Forbidden, StatusCode::FORBIDDEN),
+            (AppError::UnrecognizedSource, StatusCode::FORBIDDEN),
+            (AppError::TooManyRequests, StatusCode::TOO_MANY_REQUESTS),
+            (
+                AppError::BadRequest("x".into()),
+                StatusCode::BAD_REQUEST,
+            ),
+            (AppError::Conflict("dup".into()), StatusCode::CONFLICT),
+            (AppError::Internal, StatusCode::INTERNAL_SERVER_ERROR),
+        ];
+        for (err, expected) in cases {
+            assert_eq!(err.into_response().status(), expected);
+        }
+    }
+}

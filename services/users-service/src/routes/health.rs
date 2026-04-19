@@ -10,3 +10,16 @@ pub async fn health_check() -> (StatusCode, Json<serde_json::Value>) {
         })),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::health_check;
+
+    #[tokio::test]
+    async fn health_check_returns_ok_payload() {
+        let (status, body) = health_check().await;
+        assert_eq!(status, axum::http::StatusCode::OK);
+        assert_eq!(body["status"], "healthy");
+        assert_eq!(body["service"], "users-service");
+    }
+}
