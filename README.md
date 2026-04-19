@@ -34,19 +34,22 @@ cp .env.example .env
 
 Set `NEON_API_KEY` in `.env` ([Neon API keys](https://neon.tech/docs/manage/api-keys)).
 
+After provisioning, bootstrap prints a credentials table with **short Neon console links**: it tries **Bitly** when `BITLY_ACCESS_TOKEN` is set (see `.env.example`), otherwise **`is.gd`** via the standard library (no extra Python package). Set `NEON_CONSOLE_NO_PUBLIC_SHORTENER=yes` if you must not send console URLs to a third-party shortener.
+
 ### 3. Run
 
 ```bash
 make dev
 ```
 
-`make dev` runs a fast layout check (`make bootstrap`), then starts **Docker Compose**. The first run can take several minutes while Rust and Ruby dependencies compile inside the containers.
+`make dev` runs `make bootstrap`, then **`docker compose up -d --build`**, then waits until **gateway and service health checks** pass (see `scripts/lib/health_check.py`). The first run can take a long time while Rust and Ruby compile inside the containers; override the wait with `DEV_WAIT_TIMEOUT_SEC` if needed. Follow container output with **`make logs`**.
 
 ### When things are up
 
 | What | URL / path |
 |------|------------|
 | Gateway (redirects to docs) | [http://localhost:8080/](http://localhost:8080/) |
+| Gateway liveness JSON | [http://localhost:8080/health](http://localhost:8080/health) |
 | Static docs (served by gateway) | [http://localhost:8080/docs/](http://localhost:8080/docs/) |
 | Users HTTP API (via gateway) | `http://localhost:8080/users/...` |
 | Accounts HTTP API (via gateway) | `http://localhost:8080/accounts/...` |
@@ -60,6 +63,8 @@ Services speak to each other on the Docker network; you normally **do not** need
 | Command | What it does |
 |--------|----------------|
 | `make reset` | `docker compose down` (stops local containers; external DBs unchanged). |
+| `make stop` | Same as `make reset`. |
+| `make logs` | `docker compose logs -f` (requires `.env`; stack must already be running). |
 | `make reset-env`  | Rewrites `USERS_DATABASE_URL`, `ACCOUNTS_DATABASE_URL`, and `LEDGER_DATABASE_URL` in `.env` back to the placeholders from `.env.example`. Does **not** delete data in Neon. |
 | `make reset-neon` | Deletes the Neon **project** whose id is in `RAILS_CORE_NEON_PROJECT_ID` in `.env`, clears those database URL lines to placeholders, and strips Neon metadata keys. **Requires** `CONFIRM_PURGE_NEON=yes` in the environment, for example: `CONFIRM_PURGE_NEON=yes make reset-neon`. |
 
@@ -70,8 +75,8 @@ Services speak to each other on the Docker network; you normally **do not** need
 |--------|---------|
 | `make help` | List targets |
 | `make verify` | Assert service directories from `config/services.json` exist |
-| `make health` | HTTP smoke checks via the gateway (expects the stack to be running) |
-| `make test` | Gateway health JSON (users/accounts: `healthy`, ledger: `ok`) plus contract flow users → accounts → ledger |
+| `make health` | HTTP smoke checks via the gateway: `/health`, `/users/health`, `/accounts/health`, `/ledger/health`, and `/docs/` |
+| `make test` | Gateway health JSON (`/health` + per-service paths: users/accounts `healthy`, ledger `ok`) plus contract flow users → accounts → ledger |
 
 ## Three services (short)
 

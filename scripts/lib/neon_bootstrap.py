@@ -72,6 +72,11 @@ def dotenv_lines(text: str) -> list[str]:
     return text.splitlines()
 
 
+def _env_truthy(env: dict[str, str], key: str) -> bool:
+    v = os.environ.get(key, "").strip().lower() or env.get(key, "").strip().lower()
+    return v in ("1", "yes", "true", "on")
+
+
 def is_placeholder_database_url(url: str) -> bool:
     u = url.strip()
     if not u.startswith("postgresql://") and not u.startswith("postgres://"):
@@ -87,9 +92,49 @@ def urls_configured(env: dict[str, str]) -> bool:
     return True
 
 
-def _bitly_shorten(long_url: str, access_token: str) -> str | None:
-    """Return a bit.ly (or configured domain) short link, or None on failure."""
-    body = json.dumps({"long_url": long_url}).encode("utf-8")
+def _bitly_fetch_default_group_guid(access_token: str) -> str | None:
+    """Resolve a Bitly group_guid via GET /v4/groups (required by many shorten calls)."""
+    req = urllib.request.Request(
+        "https://api-ssl.bitly.com/v4/groups",
+        headers={"Authorization": f"Bearer {access_token}"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310 — fixed Bitly API URL
+            raw = resp.read().decode("utf-8")
+        data = json.loads(raw) if raw else {}
+    except (urllib.error.URLError, json.JSONDecodeError, TimeoutError):
+        return None
+    groups = data.get("groups") if isinstance(data, dict) else None
+    if not isinstance(groups, list) or not groups:
+        return None
+    for g in groups:
+        if isinstance(g, dict) and g.get("is_active") is True:
+            gid = g.get("guid")
+            if isinstance(gid, str) and gid.strip():
+                return gid.strip()
+    first = groups[0]
+    if isinstance(first, dict):
+        gid = first.get("guid")
+        if isinstance(gid, str) and gid.strip():
+            return gid.strip()
+    return None
+
+
+def _bitly_shorten(
+    long_url: str,
+    access_token: str,
+    *,
+    group_guid: str | None,
+) -> str | None:
+    """Return a bit.ly short link, or None on failure."""
+    payload: dict[str, Any] = {
+        "long_url": long_url,
+        "domain": "bit.ly",
+    }
+    if group_guid:
+        payload["group_guid"] = group_guid
+    body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         "https://api-ssl.bitly.com/v4/shorten",
         data=body,
@@ -112,14 +157,52 @@ def _bitly_shorten(long_url: str, access_token: str) -> str | None:
     return None
 
 
-def shorten_https_url(url: str, bitly_token: str | None) -> str:
-    """If `url` is https and BITLY token is set, replace with a Bitly short link when possible."""
+def _isgd_shorten(url: str) -> str | None:
+    """Shorten via is.gd public API (no API key). See https://is.gd/developers.php — do not use for secrets."""
+    q = urllib.parse.urlencode({"format": "simple", "url": url})
+    api = f"https://is.gd/create.php?{q}"
+    req = urllib.request.Request(
+        api,
+        method="GET",
+        headers={
+            "User-Agent": (
+                "rails-core-neon-bootstrap/1 "
+                "(https://github.com/railsinfra/rails-core; Neon console deep links only)"
+            ),
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310 — fixed is.gd API URL
+            body = resp.read().decode("utf-8").strip()
+    except (urllib.error.URLError, UnicodeDecodeError, TimeoutError):
+        return None
+    if body.startswith("Error:"):
+        return None
+    if body.startswith("https://"):
+        return body
+    if body.startswith("http://is.gd/") or body.startswith("http://v.gd/"):
+        return "https://" + body[len("http://") :]
+    return None
+
+
+def shorten_https_url(
+    url: str,
+    bitly_token: str | None,
+    *,
+    group_guid: str | None = None,
+    allow_public_shortener: bool = True,
+) -> str:
+    """Shorten https URLs for display: Bitly when configured, else is.gd (unless disabled)."""
     if not url or url == "—" or not url.startswith("https://"):
         return url
     token = (bitly_token or "").strip()
-    if not token:
-        return url
-    short = _bitly_shorten(url, token)
+    short: str | None = None
+    if token:
+        short = _bitly_shorten(url, token, group_guid=group_guid)
+        if not short and group_guid is not None:
+            short = _bitly_shorten(url, token, group_guid=None)
+    if not short and allow_public_shortener:
+        short = _isgd_shorten(url)
     return short if short else url
 
 
@@ -130,11 +213,11 @@ def neon_console_project_url(project_id: str) -> str:
 
 
 def neon_console_branch_database_url(project_id: str, branch_id: str, database_name: str) -> str:
-    """Deep link to the branch; `database` query may pre-select DB in SQL Editor (ignored if unsupported)."""
+    """Deep link to branch Tables for `database` (Neon Console path …/branches/…/tables?database=…)."""
     pid = urllib.parse.quote(project_id, safe="")
     bid = urllib.parse.quote(branch_id, safe="")
     q = urllib.parse.urlencode({"database": database_name})
-    return f"{NEON_CONSOLE_ORIGIN}/app/projects/{pid}/branches/{bid}?{q}"
+    return f"{NEON_CONSOLE_ORIGIN}/app/projects/{pid}/branches/{bid}/tables?{q}"
 
 
 def _print_dev_credentials_table(rows: list[tuple[str, str, str]]) -> None:
@@ -623,6 +706,13 @@ def main() -> int:
             os.environ.get("BITLY_ACCESS_TOKEN", "").strip()
             or final.get("BITLY_ACCESS_TOKEN", "").strip()
         ) or None
+        bitly_group = (
+            os.environ.get("BITLY_GROUP_GUID", "").strip()
+            or final.get("BITLY_GROUP_GUID", "").strip()
+        ) or None
+        if bitly and not bitly_group:
+            bitly_group = _bitly_fetch_default_group_guid(bitly)
+        allow_public = not _env_truthy(final, "NEON_CONSOLE_NO_PUBLIC_SHORTENER")
         cred_rows: list[tuple[str, str, str]] = []
         for env_key, db_name in SERVICE_DBS:
             u = final.get(env_key, "").strip()
@@ -630,7 +720,12 @@ def main() -> int:
                 continue
             if project_id and branch_id:
                 console_url = neon_console_branch_database_url(project_id, branch_id, db_name)
-                console_url = shorten_https_url(console_url, bitly)
+                console_url = shorten_https_url(
+                    console_url,
+                    bitly,
+                    group_guid=bitly_group,
+                    allow_public_shortener=allow_public,
+                )
             else:
                 console_url = "—"
             cred_rows.append((env_key, db_name, console_url))
@@ -639,7 +734,15 @@ def main() -> int:
         print("Neon project:", project_name)
         if project_id:
             proj_console = neon_console_project_url(project_id)
-            print("Neon project (console):", shorten_https_url(proj_console, bitly))
+            print(
+                "Neon project (console):",
+                shorten_https_url(
+                    proj_console,
+                    bitly,
+                    group_guid=bitly_group,
+                    allow_public_shortener=allow_public,
+                ),
+            )
         print("Compose can start; database URLs were written to .env (merged with your other variables).")
         return 0
 
