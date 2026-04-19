@@ -57,6 +57,7 @@ make reset
 | `make help` | List targets |
 | `make verify` | Assert service directories from `config/services.json` exist |
 | `make health` | HTTP smoke checks via the gateway (expects the stack to be running) |
+| `make test` | Gateway health JSON (users/accounts: `healthy`, ledger: `ok`) plus contract flow users → accounts → ledger |
 
 ## Three services (short)
 

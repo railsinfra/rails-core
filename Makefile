@@ -1,5 +1,5 @@
 # Rails-core standalone repository Makefile.
-.PHONY: help dev bootstrap verify health reset seed
+.PHONY: help dev bootstrap verify health test reset seed
 
 RAILS_CORE := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 REPO_ROOT := $(abspath $(RAILS_CORE))
@@ -10,6 +10,7 @@ help:
 	@echo "  make bootstrap  — verify vendored service directories exist"
 	@echo "  make verify     — assert service directories exist"
 	@echo "  make health     — HTTP checks via gateway :8080 (compose must be up)"
+	@echo "  make test       — health + cross-service contract tests (stack must be up)"
 	@echo "  make reset      — docker compose down"
 	@echo "  make seed       — placeholder (see script)"
 
@@ -21,6 +22,9 @@ verify:
 
 health:
 	@bash "$(RAILS_CORE)scripts/health-check.sh"
+
+test: verify
+	@bash "$(RAILS_CORE)scripts/system-test.sh"
 
 seed:
 	@bash "$(RAILS_CORE)scripts/seed.sh"
