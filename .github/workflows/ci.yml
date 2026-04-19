@@ -91,8 +91,9 @@ jobs:
           working-directory: services/ledger-service
       - run: bundle exec rails db:test:prepare test
 
-  sonarqube:
-    name: SonarQube
+  # SonarQube scan disabled for now; keep Rust + Ledger coverage and Codecov uploads.
+  coverage:
+    name: Coverage (Codecov)
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     services:
@@ -172,10 +173,10 @@ jobs:
             coverage-rust/accounts.lcov.info,
             services/ledger-service/coverage/lcov.info
 
-      - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v6
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      # - name: SonarQube Scan
+      #   uses: SonarSource/sonarqube-scan-action@v6
+      #   env:
+      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   docker-builds:
     name: Dockerfile build (${{ matrix.service }})
