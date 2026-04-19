@@ -2,13 +2,31 @@
 
 Lean **financial infrastructure**: three services (Rust + Rails), an **nginx** gateway, **proto** contracts, **Docker Compose**, and **`.env.example`**.
 
-## One command
+## Quick start
 
 ```bash
 cp .env.example .env   # set USERS_/ACCOUNTS_/LEDGER_ database URLs
 make bootstrap         # verify service directories exist
 make dev               # http://localhost:8080 — gateway + all services
 ```
+
+### Stop the stack
+
+```bash
+make reset             # docker compose down --remove-orphans (reads .env if present)
+```
+
+Use this before starting again if Compose reports a **container name conflict**, or if you left containers running in the background.
+
+### Other Make targets
+
+| Command | Purpose |
+|--------|---------|
+| `make help` | List targets and short descriptions |
+| `make bootstrap` | Same checks as quick start: vendored service dirs exist |
+| `make verify` | Assert service directories from `config/services.json` exist |
+| `make health` | HTTP checks via the gateway on `:8080` (expects `make dev` to be up) |
+| `make seed` | Placeholder; see `scripts/seed.sh` |
 
 ## Layout
 

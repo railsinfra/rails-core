@@ -16,7 +16,8 @@ services:
       - ledger-service
 
   users-service:
-    image: rust:1.82-bookworm
+    # 1.85+ required: transitive crates may use Cargo.toml edition 2024 (e.g. home).
+    image: rust:1.85-bookworm
     working_dir: /app
     volumes:
       - ./services/users-service:/app
@@ -24,12 +25,12 @@ services:
       DATABASE_URL: ${USERS_DATABASE_URL}
       HTTP_PORT: "8080"
       RUST_LOG: ${RUST_LOG:-info}
-    command: bash -lc "cargo run --release"
+    command: bash -c "cargo run --release"
     expose:
       - "8080"
 
   accounts-service:
-    image: rust:1.82-bookworm
+    image: rust:1.85-bookworm
     working_dir: /app
     volumes:
       - ./services/accounts-service:/app
@@ -37,12 +38,12 @@ services:
       DATABASE_URL: ${ACCOUNTS_DATABASE_URL}
       PORT: "8080"
       RUST_LOG: ${RUST_LOG:-info}
-    command: bash -lc "cargo run --release"
+    command: bash -c "cargo run --release"
     expose:
       - "8080"
 
   ledger-service:
-    image: ruby:3.3-bookworm
+    image: ruby:3.3.0-bookworm
     working_dir: /app
     volumes:
       - ./services/ledger-service:/app
@@ -50,6 +51,6 @@ services:
       DATABASE_URL: ${LEDGER_DATABASE_URL}
       RAILS_ENV: development
       PORT: "3000"
-    command: bash -lc "bundle install && bundle exec rails server -b 0.0.0.0 -p 3000"
+    command: bash -c "bundle install && bundle exec rails server -b 0.0.0.0 -p 3000"
     expose:
       - "3000"
