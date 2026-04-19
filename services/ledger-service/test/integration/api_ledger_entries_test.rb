@@ -78,4 +78,40 @@ class ApiLedgerEntriesTest < ActionDispatch::IntegrationTest
                  "first page should be capped at per_page, not return all rows"
     assert_equal 1, body["pagination"]["page"]
   end
+
+  test "entries index rejects invalid environment" do
+    get "/api/v1/ledger/entries",
+        headers: {
+          "Authorization" => "Bearer #{@token}",
+          "X-Environment" => "staging"
+        }
+    assert_response :bad_request
+  end
+
+  test "entries index rejects unexpected jwt errors" do
+    JWT.stub(:decode, proc { raise RuntimeError, "unexpected" }) do
+      get "/api/v1/ledger/entries",
+          headers: { "Authorization" => "Bearer #{@token}", "X-Environment" => "sandbox" }
+      assert_response :unauthorized
+      assert_equal "Authentication failed", JSON.parse(response.body)["error"]
+    end
+  end
+
+  test "entries index falls back to x-environment when jwt decode fails in set_organization" do
+    calls = 0
+    orig = JWT.method(:decode)
+    JWT.stub(:decode, proc do |*args, **kwargs|
+      calls += 1
+      raise JWT::DecodeError, "second phase" if calls >= 2
+
+      orig.call(*args, **kwargs)
+    end) do
+      get "/api/v1/ledger/entries",
+          headers: {
+            "Authorization" => "Bearer #{@token}",
+            "X-Environment" => "production"
+          }
+      assert_response :success
+    end
+  end
 end

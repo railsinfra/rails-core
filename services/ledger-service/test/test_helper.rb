@@ -22,6 +22,7 @@ if ENV["COVERAGE"] == "true"
     # Generated gRPC/protobuf stubs: exercised indirectly via LedgerService; excluding avoids skewing totals.
     add_filter "/lib/grpc/"
     add_filter "/app/channels/"
+    minimum_coverage line: 100
   end
 end
 
