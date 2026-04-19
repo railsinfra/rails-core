@@ -305,8 +305,8 @@ class LedgerPosterComprehensiveTest < ActiveSupport::TestCase
 
   test "call rescue skips Sentry when with_scope is unavailable" do
     orig_rt = Sentry.method(:respond_to?)
-    with_stub(Sentry, :respond_to?, proc do |sym, *rest|
-      sym == :with_scope ? false : orig_rt.call(sym, *rest)
+    with_stub(Sentry, :respond_to?, proc do |*a, **k|
+      a.first == :with_scope ? false : orig_rt.call(*a, **k)
     end) do
       with_stub(AccountBalance, :update_balance!, proc { raise StandardError, "bal skip sentry" }) do
         err = assert_raises(LedgerPoster::PostingError) do

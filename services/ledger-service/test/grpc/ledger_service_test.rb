@@ -254,8 +254,8 @@ class LedgerServiceTest < ActiveSupport::TestCase
       idempotency_key: SecureRandom.uuid,
       correlation_id: "c"
     )
-    with_stub(Sentry, :respond_to?, proc do |sym, *rest|
-      sym == :with_scope ? false : orig_rt.call(sym, *rest)
+    with_stub(Sentry, :respond_to?, proc do |*a, **k|
+      a.first == :with_scope ? false : orig_rt.call(*a, **k)
     end) do
       with_stub(LedgerPoster, :post, proc { raise StandardError, "post_without_sentry" }) do
         resp = LedgerService.new.post_transaction(req, nil)
