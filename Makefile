@@ -6,7 +6,7 @@ REPO_ROOT := $(abspath $(RAILS_CORE))
 
 help:
 	@echo "rails-core (repo root: $(REPO_ROOT))"
-	@echo "  make dev        — Docker Compose: nginx :8080 + all services"
+	@echo "  make dev        — bootstrap + Docker Compose: nginx :8080 + all services"
 	@echo "  make bootstrap  — verify vendored service directories exist"
 	@echo "  make verify     — assert service directories exist"
 	@echo "  make health     — HTTP checks via gateway :8080 (compose must be up)"
@@ -28,6 +28,15 @@ seed:
 reset:
 	@bash "$(RAILS_CORE)scripts/reset.sh"
 
-dev:
+dev: bootstrap
 	@test -f "$(RAILS_CORE).env" || (echo "Missing $(RAILS_CORE).env — run: cp .env.example .env" && exit 1)
+	@echo ""
+	@echo "Starting Docker Compose (first run may compile Rust/Ruby for several minutes)."
+	@echo "When containers are healthy, use the gateway on port 8080:"
+	@echo "  Gateway + APIs: http://localhost:8080/"
+	@echo "  Static docs:    http://localhost:8080/docs/"
+	@echo "  Users API:      http://localhost:8080/users/..."
+	@echo "  Accounts API:   http://localhost:8080/accounts/..."
+	@echo "  Ledger API:     http://localhost:8080/ledger/..."
+	@echo ""
 	cd "$(RAILS_CORE)" && docker compose --env-file .env up --build

@@ -1,6 +1,6 @@
 # Rails-core: single entry via nginx on host port 8080.
 # Requires: cp .env.example .env and external Postgres URLs (Neon, etc.).
-# Requires: git submodule update --init (see make bootstrap).
+# Services are vendored under services/ (see make bootstrap).
 
 services:
   gateway:
@@ -23,11 +23,14 @@ services:
       - ./services/users-service:/app
     environment:
       DATABASE_URL: ${USERS_DATABASE_URL}
-      HTTP_PORT: "8080"
+      SERVER_ADDR: "0.0.0.0:8080"
+      GRPC_PORT: "50051"
+      ACCOUNTS_GRPC_URL: http://accounts-service:9090
       RUST_LOG: ${RUST_LOG:-info}
     command: bash -c "cargo run --release"
     expose:
       - "8080"
+      - "50051"
 
   accounts-service:
     image: rust:1.85-bookworm
@@ -37,10 +40,14 @@ services:
     environment:
       DATABASE_URL: ${ACCOUNTS_DATABASE_URL}
       PORT: "8080"
+      GRPC_PORT: "9090"
+      USERS_GRPC_URL: http://users-service:50051
+      LEDGER_GRPC_URL: http://ledger-service:50053
       RUST_LOG: ${RUST_LOG:-info}
     command: bash -c "cargo run --release"
     expose:
       - "8080"
+      - "9090"
 
   ledger-service:
     image: ruby:3.3.0-bookworm
@@ -51,6 +58,8 @@ services:
       DATABASE_URL: ${LEDGER_DATABASE_URL}
       RAILS_ENV: development
       PORT: "3000"
+      GRPC_PORT: "50053"
     command: bash -c "bundle install && bundle exec rails server -b 0.0.0.0 -p 3000"
     expose:
       - "3000"
+      - "50053"

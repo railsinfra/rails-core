@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUBY_VERSION: "3.3.0"
+
+jobs:
+  compose-config:
+    name: Docker Compose config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose file
+        env:
+          USERS_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/users_ci
+          ACCOUNTS_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/accounts_ci
+          LEDGER_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ledger_ci
+        run: docker compose config --quiet
+
+  rust-users:
+    name: users-service (clippy, test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/users-service
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/users-service
+      - run: cargo clippy --locked --all-targets
+      - run: cargo test --locked
+
+  rust-accounts:
+    name: accounts-service (clippy, test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/accounts-service
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/accounts-service
+      - run: cargo clippy --locked --all-targets
+      - run: cargo test --locked
+
+  ledger-rails:
+    name: ledger-service (test)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ledger_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      RAILS_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ledger_test
+    defaults:
+      run:
+        working-directory: services/ledger-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ env.RUBY_VERSION }}
+          bundler-cache: true
+          working-directory: services/ledger-service
+      - run: bundle exec rails db:test:prepare test
+
+  docker-builds:
+    name: Dockerfile build (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [users-service, accounts-service, ledger-service]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -f "services/${{ matrix.service }}/Dockerfile" "services/${{ matrix.service }}"
