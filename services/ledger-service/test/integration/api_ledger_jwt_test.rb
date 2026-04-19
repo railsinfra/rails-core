@@ -40,7 +40,7 @@ class ApiLedgerJwtTest < ActionDispatch::IntegrationTest
   end
 
   test "transactions index rejects unexpected jwt errors" do
-    JWT.stub(:decode, proc { raise RuntimeError, "unexpected" }) do
+    with_stub(JWT, :decode, proc { raise RuntimeError, "unexpected" }) do
       token = JWT.encode({ "business_id" => @org, "exp" => Time.now.to_i + 3600 }, @secret, "HS256")
       get "/api/v1/ledger/transactions",
           headers: { "Authorization" => "Bearer #{token}", "X-Environment" => "sandbox" }

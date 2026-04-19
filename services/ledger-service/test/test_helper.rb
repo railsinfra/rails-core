@@ -28,7 +28,10 @@ end
 
 require_relative "../config/environment"
 require "rails/test_help"
+require_relative "support/test_stubbing"
 
 class ActiveSupport::TestCase
+  include TestStubbing
+
   parallelize(workers: ENV["COVERAGE"] == "true" ? 1 : :number_of_processors)
 end

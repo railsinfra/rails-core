@@ -4,7 +4,7 @@ require "test_helper"
 
 class ApplicationControllerHealthBranchesTest < ActionDispatch::IntegrationTest
   test "health marks grpc not_ready when connection refused" do
-    Socket.stub(:tcp, proc { raise Errno::ECONNREFUSED, "refused" }) do
+    with_stub(Socket, :tcp, proc { raise Errno::ECONNREFUSED }) do
       get "/health"
       assert_response :success
       body = JSON.parse(response.body)
@@ -13,7 +13,7 @@ class ApplicationControllerHealthBranchesTest < ActionDispatch::IntegrationTest
   end
 
   test "health marks grpc error on unexpected socket errors" do
-    Socket.stub(:tcp, proc { raise IOError, "weird" }) do
+    with_stub(Socket, :tcp, proc { raise IOError, "weird" }) do
       get "/health"
       assert_response :success
       body = JSON.parse(response.body)
@@ -22,7 +22,7 @@ class ApplicationControllerHealthBranchesTest < ActionDispatch::IntegrationTest
   end
 
   test "health marks grpc ok when tcp succeeds" do
-    Socket.stub(:tcp, proc { |*_args, **_kwargs| true }) do
+    with_stub(Socket, :tcp, proc { |*_args, **_kwargs| true }) do
       get "/health"
       assert_response :success
       body = JSON.parse(response.body)

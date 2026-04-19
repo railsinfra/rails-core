@@ -182,7 +182,7 @@ class LedgerPosterComprehensiveTest < ActiveSupport::TestCase
       currency: "USD"
     )
 
-    assert_raises(LedgerPoster::IdempotencyError) do
+    err = assert_raises(LedgerPoster::PostingError) do
       LedgerPoster.post(
         organization_id: @org,
         environment: "sandbox",
@@ -194,6 +194,7 @@ class LedgerPosterComprehensiveTest < ActiveSupport::TestCase
         idempotency_key: idem
       )
     end
+    assert_match(/partial state|manual intervention/i, err.message)
   end
 
   test "post returns existing posted transaction" do
@@ -242,7 +243,7 @@ class LedgerPosterComprehensiveTest < ActiveSupport::TestCase
   end
 
   test "call rescue reports to Sentry when update_balance raises" do
-    AccountBalance.stub(:update_balance!, proc { raise StandardError, "forced balance failure" }) do
+    with_stub(AccountBalance, :update_balance!, proc { raise StandardError, "forced balance failure" }) do
       err = assert_raises(LedgerPoster::PostingError) do
         LedgerPoster.post_deposit(
           organization_id: @org,
@@ -259,9 +260,9 @@ class LedgerPosterComprehensiveTest < ActiveSupport::TestCase
   end
 
   test "call rescue handles nil Sentry scope" do
-    AccountBalance.stub(:update_balance!, proc { raise StandardError, "boom" }) do
-      Sentry.stub(:with_scope, proc { |&block| block.call(nil) }) do
-        Sentry.stub(:capture_exception, proc { |_e| nil }) do
+    with_stub(AccountBalance, :update_balance!, proc { raise StandardError, "boom" }) do
+      with_stub(Sentry, :with_scope, proc { |&block| block.call(nil) }) do
+        with_stub(Sentry, :capture_exception, proc { |_e| nil }) do
           assert_raises(LedgerPoster::PostingError) do
             LedgerPoster.post_deposit(
               organization_id: @org,
@@ -283,9 +284,9 @@ class LedgerPosterComprehensiveTest < ActiveSupport::TestCase
     def scope_obj.set_context(*); end
     def scope_obj.set_tag(*); end
 
-    AccountBalance.stub(:update_balance!, proc { raise StandardError, "ledger boom" }) do
-      Sentry.stub(:with_scope, proc { |&block| block.call(scope_obj) }) do
-        Sentry.stub(:capture_exception, proc { raise StandardError, "sentry is down" }) do
+    with_stub(AccountBalance, :update_balance!, proc { raise StandardError, "ledger boom" }) do
+      with_stub(Sentry, :with_scope, proc { |&block| block.call(scope_obj) }) do
+        with_stub(Sentry, :capture_exception, proc { raise StandardError, "sentry is down" }) do
           assert_raises(LedgerPoster::PostingError) do
             LedgerPoster.post_deposit(
               organization_id: @org,

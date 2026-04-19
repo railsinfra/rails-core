@@ -106,7 +106,7 @@ class ApiLedgerTransactionsTest < ActionDispatch::IntegrationTest
   test "transactions index falls back to x-environment when jwt decode fails in set_organization" do
     calls = 0
     orig = JWT.method(:decode)
-    JWT.stub(:decode, proc do |*args, **kwargs|
+    with_stub(JWT, :decode, proc do |*args, **kwargs|
       calls += 1
       raise JWT::DecodeError, "second phase" if calls >= 2
 

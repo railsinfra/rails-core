@@ -186,9 +186,9 @@ class LedgerServiceTest < ActiveSupport::TestCase
       idempotency_key: SecureRandom.uuid,
       correlation_id: "c"
     )
-    LedgerPoster.stub(:post, proc { raise StandardError, "inner" }) do
-      Sentry.stub(:with_scope, proc { |&block| block.call(nil) }) do
-        Sentry.stub(:capture_exception, proc { |_e| nil }) do
+    with_stub(LedgerPoster, :post, proc { raise StandardError, "inner" }) do
+      with_stub(Sentry, :with_scope, proc { |&block| block.call(nil) }) do
+        with_stub(Sentry, :capture_exception, proc { |_e| nil }) do
           resp = LedgerService.new.post_transaction(req, nil)
           assert_equal "failed", resp.status
           assert_match(/inner/, resp.failure_reason)
@@ -213,9 +213,9 @@ class LedgerServiceTest < ActiveSupport::TestCase
       idempotency_key: SecureRandom.uuid,
       correlation_id: "c"
     )
-    LedgerPoster.stub(:post, proc { raise StandardError, "boom" }) do
-      Sentry.stub(:with_scope, proc { |&block| block.call(scope_obj) }) do
-        Sentry.stub(:capture_exception, proc { raise StandardError, "sentry" }) do
+    with_stub(LedgerPoster, :post, proc { raise StandardError, "boom" }) do
+      with_stub(Sentry, :with_scope, proc { |&block| block.call(scope_obj) }) do
+        with_stub(Sentry, :capture_exception, proc { raise StandardError, "sentry" }) do
           resp = LedgerService.new.post_transaction(req, nil)
           assert_equal "failed", resp.status
           assert_match(/boom/, resp.failure_reason)
