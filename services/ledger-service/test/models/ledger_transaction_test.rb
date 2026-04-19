@@ -36,7 +36,7 @@ class LedgerTransactionTest < ActiveSupport::TestCase
       status: "pending",
       idempotency_key: SecureRandom.uuid
     )
-    tx.mark_as_failed!("boom")
+    tx.mark_as_failed!(reason: "boom")
     tx.reload
     assert_equal "failed", tx.status
     assert_equal "boom", tx.failure_reason

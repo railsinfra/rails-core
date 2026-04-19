@@ -68,6 +68,7 @@ class ApiLedgerTransactionsTest < ActionDispatch::IntegrationTest
         }
     assert_response :success
     body = JSON.parse(response.body)
+    assert_not_empty body["transactions"], "expected at least one transaction after post_deposit"
     assert(body["transactions"].all? { |t| t["status"] == "posted" })
   end
 

@@ -12,7 +12,8 @@ class LedgerEntry < ApplicationRecord
   validates :currency, presence: true
 
   belongs_to :ledger_account
-  belongs_to :ledger_transaction, class_name: 'LedgerTransaction', foreign_key: 'transaction_id'
+  belongs_to :ledger_transaction, class_name: 'LedgerTransaction', foreign_key: 'transaction_id',
+                                    inverse_of: :ledger_entries
 
   enum entry_type: {
     debit: 'debit',

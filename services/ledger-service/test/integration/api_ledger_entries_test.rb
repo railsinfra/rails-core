@@ -42,7 +42,14 @@ class ApiLedgerEntriesTest < ActionDispatch::IntegrationTest
   end
 
   test "entries index respects page and per_page" do
-    3.times do |i|
+    deposit_count = 3
+    per_page = 2
+    # Each successful deposit creates two ledger rows (debit + credit).
+    entries_per_deposit = 2
+    total_entries = deposit_count * entries_per_deposit
+    expected_total_pages = (total_entries + per_page - 1) / per_page
+
+    deposit_count.times do |i|
       LedgerPoster.post_deposit(
         organization_id: @organization_id,
         environment: "sandbox",
@@ -55,14 +62,20 @@ class ApiLedgerEntriesTest < ActionDispatch::IntegrationTest
     end
 
     get "/api/v1/ledger/entries",
-        params: { page: 1, per_page: 2 },
+        params: { page: 1, per_page: per_page },
         headers: {
           "Authorization" => "Bearer #{@token}",
           "X-Environment" => "sandbox"
         }
     assert_response :success
     body = JSON.parse(response.body)
-    assert_operator body["data"].length, :<=, 2
-    assert_operator body["pagination"]["total_pages"], :>=, 1
+
+    assert_equal total_entries, body["pagination"]["total_count"],
+                 "expected #{total_entries} ledger rows for #{deposit_count} deposits"
+    assert_equal expected_total_pages, body["pagination"]["total_pages"],
+                 "expected ceil(#{total_entries}/#{per_page}) = #{expected_total_pages} pages"
+    assert_equal per_page, body["data"].length,
+                 "first page should be capped at per_page, not return all rows"
+    assert_equal 1, body["pagination"]["page"]
   end
 end

@@ -22,8 +22,6 @@ if ENV["COVERAGE"] == "true"
     # Generated gRPC/protobuf stubs: exercised indirectly via LedgerService; excluding avoids skewing totals.
     add_filter "/lib/grpc/"
     add_filter "/app/channels/"
-    add_filter "/app/jobs/"
-    add_filter "/app/mailers/"
   end
 end
 

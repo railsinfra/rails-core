@@ -29,9 +29,17 @@ pub struct EnvironmentInfo {
     pub r#type: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct RefreshTokenRequest {
     pub refresh_token: String,
+}
+
+impl std::fmt::Debug for RefreshTokenRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RefreshTokenRequest")
+            .field("refresh_token", &"[REDACTED]")
+            .finish()
+    }
 }
 
 #[derive(Serialize)]

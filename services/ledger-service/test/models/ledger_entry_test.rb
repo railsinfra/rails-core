@@ -3,7 +3,7 @@
 require "test_helper"
 
 class LedgerEntryTest < ActiveSupport::TestCase
-  test "rejects invalid entry_type" do
+  test "rejects invalid environment" do
     org = SecureRandom.uuid
     acct = LedgerAccount.create!(
       organization_id: org,
@@ -21,14 +21,14 @@ class LedgerEntryTest < ActiveSupport::TestCase
     )
     entry = LedgerEntry.new(
       organization_id: org,
-      environment: "sandbox",
+      environment: "staging",
       ledger_account_id: acct.id,
       transaction_id: tx.id,
-      entry_type: "bogus",
+      entry_type: "debit",
       amount: 1,
       currency: "USD"
     )
     assert_not entry.valid?
-    assert_includes entry.errors[:entry_type], "is not included in the list"
+    assert_includes entry.errors[:environment], "is not included in the list"
   end
 end
