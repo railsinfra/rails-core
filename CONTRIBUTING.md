@@ -36,15 +36,13 @@ From the repository root, `make verify` checks that vendored service folders exi
 
 ## Branching (Gitflow)
 
-We follow **Gitflow**-style branching:
+Long-lived branches are **`main`** (production-ready) and **`develop`** (integration). We follow **Gitflow**-style branching for everything else:
 
-- **`main`** — production-ready history; only merges from `release/*` or `hotfix/*`.
-- **`develop`** — day-to-day integration; default base for new work.
-- **`feature/*`** — branch from `develop` for new work (for example `feature/rai-6-open-source-readiness`). Open a PR back into `develop`.
-- **`release/*`** — branch from `develop` when cutting a release; only release prep and fixes, then merge to `main` and back into `develop`.
-- **`hotfix/*`** — branch from `main` for urgent production fixes, then merge to `main` and `develop`.
+- **`feature/*`** — branch from `develop` (for example `feature/rai-6-open-source-readiness`).
+- **`release/*`** — cut from `develop` for a release; merges to `main` and back into `develop` (usually maintainer-driven).
+- **`hotfix/*`** — branched from `main` for urgent production fixes; merges to `main` and `develop` (usually maintainer-driven).
 
-If your change is small and the team agrees on an exception, ask before opening a feature PR against `main`.
+**All pull requests must target `develop`.** Do not open PRs against `main`; production updates flow from `develop` via release/hotfix merges handled outside normal contributor PRs.
 
 ## Commit messages (Conventional Commits)
 
@@ -63,11 +61,12 @@ Format:
 - **Scope**: optional; name the area (for example `gateway`, `ledger-service`, `ci`).
 - **Breaking changes**: add `!` after the type or scope, for example `feat(api)!: remove legacy transfer endpoint`.
 
-Squash merges should preserve a conventional **subject line** on the main integration branch.
+Squash merges should preserve a conventional **subject line** on `develop`.
 
 ## Pull requests
 
-- Branch from **`develop`** using the Gitflow rules above, unless you are on a release or hotfix line.
+- **Base branch:** every PR must target **`develop`**.
+- Branch your work from **`develop`** (see Gitflow above).
 - Keep the change focused on one concern when possible.
 - Describe **what** changed and **why** in the PR body (plain language is enough).
 - Ensure CI is green before requesting review.
