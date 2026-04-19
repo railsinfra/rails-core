@@ -10,3 +10,7 @@ target/
 services/ledger-service/log/
 services/ledger-service/tmp/
 services/ledger-service/storage/
+services/ledger-service/coverage/
+
+# CI / Sonar (Rust LCOV at repo root)
+coverage-rust/

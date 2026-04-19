@@ -95,10 +95,26 @@ jobs:
     name: SonarQube
     if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ledger_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     permissions:
       contents: read
     env:
       RUST_VERSION: stable
+      RAILS_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ledger_test
     steps:
       - uses: actions/checkout@v4
         with:
@@ -109,6 +125,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_VERSION }}
+          components: llvm-tools-preview
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -116,13 +133,33 @@ jobs:
             services/users-service -> target
             services/accounts-service -> target
 
-      - name: Run Rust tests (users-service)
-        working-directory: services/users-service
-        run: cargo test --locked
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
 
-      - name: Run Rust tests (accounts-service)
+      - name: Rust coverage (users-service)
+        working-directory: services/users-service
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/coverage-rust"
+          cargo llvm-cov test --locked --lcov --output-path "${GITHUB_WORKSPACE}/coverage-rust/users.lcov.info"
+
+      - name: Rust coverage (accounts-service)
         working-directory: services/accounts-service
-        run: cargo test --locked
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/coverage-rust"
+          cargo llvm-cov test --locked --lcov --output-path "${GITHUB_WORKSPACE}/coverage-rust/accounts.lcov.info"
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ env.RUBY_VERSION }}
+          bundler-cache: true
+          working-directory: services/ledger-service
+
+      - name: Ledger coverage (Rails tests)
+        working-directory: services/ledger-service
+        env:
+          COVERAGE: "true"
+        run: bundle exec rails db:test:prepare test
 
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v6
