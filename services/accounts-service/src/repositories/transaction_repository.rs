@@ -1,6 +1,6 @@
 use crate::errors::AppError;
 use crate::models::{Transaction, TransactionKind, TransactionStatus, PaginationMeta};
-use chrono::{DateTime, Duration, Utc};
+use chrono::Duration;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
@@ -223,31 +223,105 @@ impl TransactionRepository {
         ))
     }
 
-    /// Find pending transactions across all organizations older than a cutoff.
-    /// Used by the ledger retry worker (eventual consistency).
-    pub async fn find_pending_older_than_any_org(
+    /// Atomically move `pending` → `posting` for one transaction. Returns `None` if not pending (e.g. already posting/posted).
+    pub async fn try_claim_pending_for_post(
+        pool: &PgPool,
+        id: Uuid,
+    ) -> Result<Option<Transaction>, AppError> {
+        let row = sqlx::query(
+            r#"
+            UPDATE transactions
+            SET status = 'posting', failure_reason = NULL, updated_at = NOW()
+            WHERE id = $1 AND status = 'pending'
+            RETURNING id, organization_id, from_account_id, to_account_id, amount, currency,
+                      transaction_kind, status, failure_reason, idempotency_key, environment, description, external_recipient_id, reference_id, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+
+        Ok(row.map(|r| Self::row_to_transaction(&r)).transpose()?)
+    }
+
+    /// Move stale `posting` rows back to `pending` so they can be retried (separate statement from claim).
+    async fn reclaim_stale_posting_rows(
+        pool: &PgPool,
+        stale_posting_after: Duration,
+        environment: Option<&str>,
+    ) -> Result<(), AppError> {
+        let stale_secs: i64 = stale_posting_after.num_seconds().max(1);
+        if let Some(env) = environment {
+            sqlx::query(
+                r#"
+                UPDATE transactions
+                SET status = 'pending',
+                    failure_reason = 'posting lease expired; reclaimed for retry',
+                    updated_at = NOW()
+                WHERE status = 'posting'
+                  AND updated_at < NOW() - ($1::bigint * INTERVAL '1 second')
+                  AND environment = $2
+                "#,
+            )
+            .bind(stale_secs)
+            .bind(env)
+            .execute(pool)
+            .await?;
+        } else {
+            sqlx::query(
+                r#"
+                UPDATE transactions
+                SET status = 'pending',
+                    failure_reason = 'posting lease expired; reclaimed for retry',
+                    updated_at = NOW()
+                WHERE status = 'posting'
+                  AND updated_at < NOW() - ($1::bigint * INTERVAL '1 second')
+                "#,
+            )
+            .bind(stale_secs)
+            .execute(pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Reclaim stale `posting` rows, then atomically claim `pending` rows for the ledger retry worker.
+    /// Uses `FOR UPDATE SKIP LOCKED` so concurrent workers do not duplicate work.
+    pub async fn claim_pending_transactions_for_ledger_post(
         pool: &PgPool,
         older_than: Duration,
+        stale_posting_after: Duration,
         limit: Option<i64>,
         environment: Option<&str>,
     ) -> Result<Vec<Transaction>, AppError> {
-        let cutoff: DateTime<Utc> = Utc::now() - older_than;
+        Self::reclaim_stale_posting_rows(pool, stale_posting_after, environment).await?;
+
         let limit = limit.unwrap_or(100);
+        let older_secs: i64 = older_than.num_seconds().max(1);
 
         let rows = if let Some(env) = environment {
             sqlx::query(
                 r#"
-                SELECT id, organization_id, from_account_id, to_account_id, amount, currency,
-                       transaction_kind, status, failure_reason, idempotency_key, environment, description, external_recipient_id, reference_id, created_at, updated_at
-                FROM transactions
-                WHERE status = 'pending'
-                  AND created_at < $1
-                  AND environment = $3
-                ORDER BY created_at ASC
-                LIMIT $2
+                WITH candidates AS (
+                    SELECT id FROM transactions
+                    WHERE status = 'pending'
+                      AND created_at < NOW() - ($1::bigint * INTERVAL '1 second')
+                      AND environment = $3
+                    ORDER BY created_at ASC
+                    LIMIT $2
+                    FOR UPDATE SKIP LOCKED
+                )
+                UPDATE transactions t
+                SET status = 'posting',
+                    failure_reason = NULL,
+                    updated_at = NOW()
+                FROM candidates c
+                WHERE t.id = c.id
+                RETURNING t.id, t.organization_id, t.from_account_id, t.to_account_id, t.amount, t.currency,
+                          t.transaction_kind, t.status, t.failure_reason, t.idempotency_key, t.environment, t.description, t.external_recipient_id, t.reference_id, t.created_at, t.updated_at
                 "#,
             )
-            .bind(cutoff)
+            .bind(older_secs)
             .bind(limit)
             .bind(env)
             .fetch_all(pool)
@@ -255,15 +329,25 @@ impl TransactionRepository {
         } else {
             sqlx::query(
                 r#"
-                SELECT id, organization_id, from_account_id, to_account_id, amount, currency,
-                       transaction_kind, status, failure_reason, idempotency_key, environment, description, external_recipient_id, reference_id, created_at, updated_at
-                FROM transactions
-                WHERE status = 'pending' AND created_at < $1
-                ORDER BY created_at ASC
-                LIMIT $2
+                WITH candidates AS (
+                    SELECT id FROM transactions
+                    WHERE status = 'pending'
+                      AND created_at < NOW() - ($1::bigint * INTERVAL '1 second')
+                    ORDER BY created_at ASC
+                    LIMIT $2
+                    FOR UPDATE SKIP LOCKED
+                )
+                UPDATE transactions t
+                SET status = 'posting',
+                    failure_reason = NULL,
+                    updated_at = NOW()
+                FROM candidates c
+                WHERE t.id = c.id
+                RETURNING t.id, t.organization_id, t.from_account_id, t.to_account_id, t.amount, t.currency,
+                          t.transaction_kind, t.status, t.failure_reason, t.idempotency_key, t.environment, t.description, t.external_recipient_id, t.reference_id, t.created_at, t.updated_at
                 "#,
             )
-            .bind(cutoff)
+            .bind(older_secs)
             .bind(limit)
             .fetch_all(pool)
             .await?
@@ -283,6 +367,7 @@ impl TransactionRepository {
     ) -> Result<Transaction, AppError> {
         let status_str: &str = match status {
             TransactionStatus::Pending => "pending",
+            TransactionStatus::Posting => "posting",
             TransactionStatus::Posted => "posted",
             TransactionStatus::Failed => "failed",
         };
@@ -317,6 +402,7 @@ impl TransactionRepository {
         let status_str: String = row.get("status");
         let status = match status_str.as_str() {
             "pending" => TransactionStatus::Pending,
+            "posting" => TransactionStatus::Posting,
             "posted" => TransactionStatus::Posted,
             "failed" => TransactionStatus::Failed,
             _ => return Err(AppError::Internal("Invalid transaction status".to_string())),

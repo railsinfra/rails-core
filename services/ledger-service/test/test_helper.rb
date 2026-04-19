@@ -3,7 +3,20 @@ ENV["RAILS_ENV"] ||= "test"
 if ENV["COVERAGE"] == "true"
   require "simplecov"
   require "simplecov_json_formatter"
-  SimpleCov.formatter = SimpleCov::Formatter::JSONFormatter
+  require "simplecov-lcov"
+
+  SimpleCov::Formatter::LcovFormatter.config do |c|
+    c.report_with_single_file = true
+    c.single_report_path = File.expand_path("../coverage/lcov.info", __dir__)
+  end
+
+  SimpleCov.formatter = SimpleCov::Formatter::MultiFormatter.new(
+    [
+      SimpleCov::Formatter::JSONFormatter,
+      SimpleCov::Formatter::LcovFormatter,
+    ],
+  )
+
   SimpleCov.start "rails" do
     add_filter "/test/"
   end

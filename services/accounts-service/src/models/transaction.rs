@@ -47,6 +47,8 @@ pub enum TransactionKind {
 #[serde(rename_all = "lowercase")]
 pub enum TransactionStatus {
     Pending,
+    /// In-flight ledger post; excluded from retry selection until posted, failed, pending again, or reclaimed.
+    Posting,
     Posted,
     Failed,
 }
@@ -217,7 +219,7 @@ impl AccountTransactionResponse {
         reference_id: &str,
     ) -> Self {
         let status = match transaction.status {
-            TransactionStatus::Pending => "pending",
+            TransactionStatus::Pending | TransactionStatus::Posting => "pending",
             TransactionStatus::Posted => "completed",
             TransactionStatus::Failed => "failed",
         };
@@ -331,6 +333,8 @@ mod tests {
         let tx_failed = sample_transaction(Uuid::new_v4(), acc, acc, TransactionKind::Deposit, TransactionStatus::Failed, 100);
         assert_eq!(AccountTransactionResponse::from_transaction(&tx_pending, acc, 0).status, "pending");
         assert_eq!(AccountTransactionResponse::from_transaction(&tx_failed, acc, 0).status, "failed");
+        let tx_posting = sample_transaction(Uuid::new_v4(), acc, acc, TransactionKind::Deposit, TransactionStatus::Posting, 100);
+        assert_eq!(AccountTransactionResponse::from_transaction(&tx_posting, acc, 0).status, "pending");
     }
 
     #[test]
