@@ -83,6 +83,6 @@ Add RPCs here **before** implementing cross-service calls. Version bump = v2 pac
 
 - **Single env file:** `.env` at the repository root (copy from `.env.example`).
 - **No local Postgres in compose:** services read `*_DATABASE_URL` pointing at hosted Postgres.
-- **One command:** `make dev` runs Compose: builds/runs Rust & Rails in dev images with bind mounts, starts nginx on **8080**.
+- **One command:** `make dev` runs Compose (`up -d --build`), waits for `/health` through the gateway, then prints URLs; nginx stays on **8080**. Use `make logs` for container output.
 
 See [quickstart.md](quickstart.md) for exact commands.

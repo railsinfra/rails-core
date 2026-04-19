@@ -2,16 +2,22 @@
 """Print vendored service directory check as a tabulate table (colored when TTY)."""
 from __future__ import annotations
 
+import importlib.util
 import sys
 from pathlib import Path
 
-_LIB_DIR = Path(__file__).resolve().parent
-if str(_LIB_DIR) not in sys.path:
-    sys.path.insert(0, str(_LIB_DIR))
-
 from tabulate import tabulate
 
-from read_manifest import paths_from_manifest
+_LIB_DIR = Path(__file__).resolve().parent
+_read_manifest_path = _LIB_DIR / "read_manifest.py"
+_spec = importlib.util.spec_from_file_location(
+    "_rails_core_read_manifest", _read_manifest_path
+)
+if _spec is None or _spec.loader is None:
+    raise ImportError(f"cannot load {_read_manifest_path}")
+_read_manifest = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_read_manifest)
+paths_from_manifest = _read_manifest.paths_from_manifest
 
 _GREEN = "\033[32m"
 _RED = "\033[31m"
