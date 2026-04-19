@@ -1,4 +1,4 @@
-"""Print submodule-relative paths from config/services.json (one per line)."""
+"""Print service directory paths from config/services.json (one per line)."""
 from __future__ import annotations
 
 import json

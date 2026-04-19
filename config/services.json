@@ -1,7 +1,6 @@
 {
   "version": 3,
-  "tracking": "https://linear.app/railsinfra/issue/RAI-5/design-monorepo-architecture-for-rails-core-services",
-  "description": "Vendored backend services (normal directories under services/, not git submodules).",
+  "description": "Backend services shipped in this repository (under services/).",
   "services": [
     {
       "id": "users-service",
