@@ -11,20 +11,12 @@ if ! git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   exit 1
 fi
 
-errors=0
-while IFS= read -r rel; do
-  [[ -z "$rel" ]] && continue
-  full="$REPO_ROOT/$rel"
-  if [[ ! -d "$full" ]]; then
-    echo "MISSING directory: $rel" >&2
-    errors=$((errors + 1))
-    continue
-  fi
-  echo "OK $rel"
-done < <(python3 "$SCRIPT_DIR/lib/read_manifest.py" "$MANIFEST")
+if ! python3 -c "import tabulate" 2>/dev/null; then
+  python3 -m pip install -q -r "$SCRIPT_DIR/lib/requirements.txt"
+fi
 
-if [[ "$errors" -gt 0 ]]; then
-  echo "verify-layout: $errors path(s) missing." >&2
+if ! python3 "$SCRIPT_DIR/lib/print_vendor_services_check.py" "$REPO_ROOT" "$MANIFEST"; then
+  echo "verify-layout: one or more paths missing (see table)." >&2
   exit 1
 fi
 echo "All declared paths present."

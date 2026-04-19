@@ -1,0 +1,186 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "name": "rails-core",
+    "description": "Same sequence as README: gateway → register business → API key → two accounts → deposit → transfer.\n\n**Setup:** `make dev` (gateway on :8080). Import this file, set `base_url` if needed, then run **1 → 5 in order** (tests save `access_token`, `environment_id`, `api_key`, `from_account_id`, `to_account_id`).\n\nIf users-service has `INTERNAL_SERVICE_TOKEN_ALLOWLIST`, add `X-Internal-Service-Token` on sensitive routes (see `services/users-service/README.md`).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8080" },
+    { "key": "access_token", "value": "" },
+    { "key": "environment_id", "value": "" },
+    { "key": "api_key", "value": "" },
+    { "key": "from_account_id", "value": "" },
+    { "key": "to_account_id", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "1. Register business",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code !== 200 && pm.response.code !== 201) { return; }",
+              "try {",
+              "  const j = pm.response.json();",
+              "  if (j.access_token) pm.collectionVariables.set('access_token', j.access_token);",
+              "  if (j.selected_environment_id) pm.collectionVariables.set('environment_id', j.selected_environment_id);",
+              "} catch (e) { console.warn(e); }"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Demo Co\",\n  \"website\": \"https://example.com\",\n  \"admin_first_name\": \"Ada\",\n  \"admin_last_name\": \"Lovelace\",\n  \"admin_email\": \"ada+demo@example.com\",\n  \"admin_password\": \"SecurePass123!\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": "{{base_url}}/users/api/v1/business/register",
+        "description": "Change `admin_email` if this address is already registered."
+      },
+      "response": []
+    },
+    {
+      "name": "2. Create server API key",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code !== 200 && pm.response.code !== 201) { return; }",
+              "try {",
+              "  const j = pm.response.json();",
+              "  if (j.key) pm.collectionVariables.set('api_key', j.key);",
+              "} catch (e) { console.warn(e); }"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{access_token}}" },
+          { "key": "X-Environment-Id", "value": "{{environment_id}}" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": "{{base_url}}/users/api/v1/api-keys",
+        "description": "Plaintext `key` is returned once; saved to collection variable `api_key`."
+      },
+      "response": []
+    },
+    {
+      "name": "3a. Create account (holder A)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code !== 200 && pm.response.code !== 201) { return; }",
+              "try {",
+              "  const j = pm.response.json();",
+              "  if (j.id) pm.collectionVariables.set('from_account_id', j.id);",
+              "} catch (e) { console.warn(e); }"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "X-API-Key", "value": "{{api_key}}" },
+          { "key": "X-Environment", "value": "sandbox" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"account_type\": \"checking\",\n  \"email\": \"holder-a@example.com\",\n  \"first_name\": \"A\",\n  \"last_name\": \"One\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": "{{base_url}}/accounts/api/v1/accounts"
+      },
+      "response": []
+    },
+    {
+      "name": "3b. Create account (holder B)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code !== 200 && pm.response.code !== 201) { return; }",
+              "try {",
+              "  const j = pm.response.json();",
+              "  if (j.id) pm.collectionVariables.set('to_account_id', j.id);",
+              "} catch (e) { console.warn(e); }"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "X-API-Key", "value": "{{api_key}}" },
+          { "key": "X-Environment", "value": "sandbox" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"account_type\": \"checking\",\n  \"email\": \"holder-b@example.com\",\n  \"first_name\": \"B\",\n  \"last_name\": \"Two\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": "{{base_url}}/accounts/api/v1/accounts"
+      },
+      "response": []
+    },
+    {
+      "name": "4. Deposit (first account)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "X-Environment", "value": "sandbox" },
+          { "key": "Idempotency-Key", "value": "readme-deposit-1" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"amount\": 100000\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": "{{base_url}}/accounts/api/v1/accounts/{{from_account_id}}/deposit",
+        "description": "Amount in minor units (e.g. cents)."
+      },
+      "response": []
+    },
+    {
+      "name": "5. Transfer to second account",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "X-Environment", "value": "sandbox" },
+          { "key": "Idempotency-Key", "value": "readme-transfer-1" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"to_account_id\": \"{{to_account_id}}\",\n  \"amount\": 5000\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": "{{base_url}}/accounts/api/v1/accounts/{{from_account_id}}/transfer"
+      },
+      "response": []
+    }
+  ]
+}
