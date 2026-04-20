@@ -109,7 +109,23 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
-    use super::{compose_server_addr, strip_jdbc_database_url_prefix};
+    use super::{compose_server_addr, load, strip_jdbc_database_url_prefix};
+    use std::sync::{Mutex, OnceLock};
+
+    fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        match LOCK.get_or_init(|| Mutex::new(())).lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        }
+    }
+
+    fn restore_env(key: &str, saved: Option<String>) {
+        match saved {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+    }
 
     #[test]
     fn strip_jdbc_prefix() {
@@ -141,5 +157,39 @@ mod tests {
             compose_server_addr("0.0.0.0", None, None),
             "0.0.0.0:8080"
         );
+    }
+
+    #[test]
+    fn load_errors_when_database_url_missing() {
+        let _l = test_env_lock();
+        let saved_db = std::env::var("DATABASE_URL").ok();
+        std::env::remove_var("DATABASE_URL");
+        assert!(load().is_err());
+        restore_env("DATABASE_URL", saved_db);
+    }
+
+    #[test]
+    fn load_strips_jdbc_prefix_and_reads_optional_env() {
+        let _l = test_env_lock();
+        let saved_db = std::env::var("DATABASE_URL").ok();
+        let saved_grpc = std::env::var("GRPC_PORT").ok();
+        let saved_accounts = std::env::var("ACCOUNTS_GRPC_URL").ok();
+        let saved_from = std::env::var("RESEND_FROM_EMAIL").ok();
+
+        std::env::set_var("DATABASE_URL", "jdbc:postgresql://db.example:5432/app");
+        std::env::set_var("GRPC_PORT", "60001");
+        std::env::set_var("ACCOUNTS_GRPC_URL", "http://accounts.test:999");
+        std::env::set_var("RESEND_FROM_EMAIL", "custom-from@example.com");
+
+        let c = load().expect("load");
+        assert_eq!(c.database_url, "postgresql://db.example:5432/app");
+        assert_eq!(c.grpc_port, 60001);
+        assert_eq!(c.accounts_grpc_url, "http://accounts.test:999");
+        assert_eq!(c.resend_from_email, "custom-from@example.com");
+
+        restore_env("DATABASE_URL", saved_db);
+        restore_env("GRPC_PORT", saved_grpc);
+        restore_env("ACCOUNTS_GRPC_URL", saved_accounts);
+        restore_env("RESEND_FROM_EMAIL", saved_from);
     }
 }

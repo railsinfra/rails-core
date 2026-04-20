@@ -26,6 +26,22 @@ jobs:
   rust-users:
     name: users-service (clippy, test)
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: users_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/users_test
     defaults:
       run:
         working-directory: services/users-service
@@ -138,11 +154,20 @@ jobs:
         with:
           tool: cargo-llvm-cov
 
+      - name: Create Postgres database for users-service coverage
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = 'users_service_cov'" | grep -q 1 \
+            || PGPASSWORD=postgres psql -h localhost -U postgres -d postgres -c "CREATE DATABASE users_service_cov;"
+
       - name: Rust coverage (users-service)
         working-directory: services/users-service
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/users_service_cov
         run: |
           mkdir -p "${GITHUB_WORKSPACE}/coverage-rust"
-          cargo llvm-cov test --locked --lcov --output-path "${GITHUB_WORKSPACE}/coverage-rust/users.lcov.info"
+          cargo llvm-cov test --locked --lcov --output-path "${GITHUB_WORKSPACE}/coverage-rust/users.lcov.info" \
+            --fail-under-lines 90 \
+            --ignore-filename-regex '(^|/)src/(main|bootstrap)\.rs$'
 
       - name: Rust coverage (accounts-service)
         working-directory: services/accounts-service

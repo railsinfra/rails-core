@@ -93,6 +93,47 @@ async fn internal_caller_middleware(req: Request<Body>, next: Next) -> Result<Re
     Ok(next.run(req).await)
 }
 
+pub(crate) fn log_correlation_request_finished(
+    correlation_id: &str,
+    method: &str,
+    path: &str,
+    status: u16,
+    duration_ms: u128,
+) {
+    let outcome = if status >= 400 { "failed" } else { "success" };
+    if status >= 500 {
+        tracing::error!(
+            correlation_id = %correlation_id,
+            %method,
+            %path,
+            status = status,
+            duration_ms = duration_ms as u64,
+            outcome = outcome,
+            "finish"
+        );
+    } else if status >= 400 {
+        tracing::warn!(
+            correlation_id = %correlation_id,
+            %method,
+            %path,
+            status = status,
+            duration_ms = duration_ms as u64,
+            outcome = outcome,
+            "finish"
+        );
+    } else {
+        tracing::info!(
+            correlation_id = %correlation_id,
+            %method,
+            %path,
+            status = status,
+            duration_ms = duration_ms as u64,
+            outcome = outcome,
+            "finish"
+        );
+    }
+}
+
 async fn correlation_id_middleware(req: Request<Body>, next: Next) -> Result<Response, AppError> {
     let path = req.uri().path().to_string();
     let method = req.method().to_string();
@@ -133,15 +174,7 @@ async fn correlation_id_middleware(req: Request<Body>, next: Next) -> Result<Res
     );
     let status = res.status().as_u16();
     let duration_ms = start.elapsed().as_millis();
-    let outcome = if status >= 400 { "failed" } else { "success" };
-
-    if status >= 500 {
-        tracing::error!(correlation_id = %correlation_id, %method, %path, status = status, duration_ms = duration_ms as u64, outcome = outcome, "finish");
-    } else if status >= 400 {
-        tracing::warn!(correlation_id = %correlation_id, %method, %path, status = status, duration_ms = duration_ms as u64, outcome = outcome, "finish");
-    } else {
-        tracing::info!(correlation_id = %correlation_id, %method, %path, status = status, duration_ms = duration_ms as u64, outcome = outcome, "finish");
-    }
+    log_correlation_request_finished(&correlation_id, &method, &path, status, duration_ms);
 
     Ok(res)
 }
@@ -180,20 +213,15 @@ async fn auth_rate_limit_middleware(req: Request<Body>, next: Next) -> Result<Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::Request;
+    use crate::test_support::global_test_lock;
     use axum::extract::ConnectInfo;
+    use axum::http::Request;
     use std::net::SocketAddr;
-    use std::sync::{Mutex, OnceLock};
 
     fn reset_auth_rate_limiter() {
         if let Some(limiter) = AUTH_RATE_LIMITER.get() {
             limiter.reset();
         }
-    }
-
-    fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static TEST_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        TEST_ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
     }
 
     #[test]
@@ -209,7 +237,7 @@ mod tests {
 
     #[test]
     fn extract_client_key_uses_peer_ip_when_untrusted() {
-        let _lock = test_env_lock();
+        let _lock = global_test_lock();
         std::env::remove_var("USERS_TRUSTED_PROXY_IPS");
         let mut req = Request::builder()
             .uri("/api/v1/auth/login")
@@ -222,7 +250,7 @@ mod tests {
 
     #[test]
     fn extract_client_key_uses_forwarded_ip_when_trusted() {
-        let _lock = test_env_lock();
+        let _lock = global_test_lock();
         std::env::set_var("USERS_TRUSTED_PROXY_IPS", "127.0.0.1");
         let mut req = Request::builder()
             .uri("/api/v1/auth/login")
@@ -234,8 +262,19 @@ mod tests {
     }
 
     #[test]
+    fn log_correlation_request_finished_covers_status_branches() {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_test_writer()
+            .try_init();
+        log_correlation_request_finished("cid", "GET", "/api/x", 200, 1);
+        log_correlation_request_finished("cid", "GET", "/api/x", 404, 2);
+        log_correlation_request_finished("cid", "GET", "/api/x", 500, 3);
+    }
+
+    #[test]
     fn extract_client_key_ignores_forwarded_ip_when_last_hop_untrusted() {
-        let _lock = test_env_lock();
+        let _lock = global_test_lock();
         std::env::set_var("USERS_TRUSTED_PROXY_IPS", "127.0.0.1");
         let mut req = Request::builder()
             .uri("/api/v1/auth/login")
