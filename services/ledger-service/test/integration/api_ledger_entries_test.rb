@@ -78,4 +78,41 @@ class ApiLedgerEntriesTest < ActionDispatch::IntegrationTest
                  "first page should be capped at per_page, not return all rows"
     assert_equal 1, body["pagination"]["page"]
   end
+
+  test "entries index rejects invalid environment" do
+    get "/api/v1/ledger/entries",
+        headers: {
+          "Authorization" => "Bearer #{@token}",
+          "X-Environment" => "staging"
+        }
+    assert_response :bad_request
+  end
+
+  test "entries index rejects unexpected jwt errors" do
+    with_stub(JWT, :decode, proc { raise RuntimeError, "unexpected" }) do
+      get "/api/v1/ledger/entries",
+          headers: { "Authorization" => "Bearer #{@token}", "X-Environment" => "sandbox" }
+      assert_response :unauthorized
+      assert_equal "Authentication failed", JSON.parse(response.body)["error"]
+    end
+  end
+
+  test "entries index rejects expired jwt" do
+    token = JWT.encode(
+      { "business_id" => @organization_id, "exp" => Time.now.to_i - 120 },
+      ENV.fetch("JWT_SECRET", "dev_secret"),
+      "HS256"
+    )
+    get "/api/v1/ledger/entries",
+        headers: { "Authorization" => "Bearer #{token}", "X-Environment" => "sandbox" }
+    assert_response :unauthorized
+    assert_match(/expired/i, JSON.parse(response.body)["error"])
+  end
+
+  test "entries index rejects malformed jwt with decode error" do
+    get "/api/v1/ledger/entries",
+        headers: { "Authorization" => "Bearer not-a-jwt", "X-Environment" => "sandbox" }
+    assert_response :unauthorized
+    assert_match(/Invalid token/i, JSON.parse(response.body)["error"])
+  end
 end

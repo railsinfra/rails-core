@@ -50,6 +50,43 @@ class LedgerAccountTest < ActiveSupport::TestCase
     assert_equal 0, acct.current_balance
   end
 
+  test "current_balance covers equity income and expense with balance" do
+    org = SecureRandom.uuid
+    %w[equity income expense].each do |atype|
+      acct = LedgerAccount.create!(
+        organization_id: org,
+        environment: "sandbox",
+        external_account_id: "#{atype}_#{SecureRandom.hex(4)}",
+        account_type: atype,
+        currency: "USD"
+      )
+      AccountBalance.create!(
+        organization_id: org,
+        environment: "sandbox",
+        ledger_account_id: acct.id,
+        balance_cents: 50,
+        currency: "USD",
+        last_updated_at: Time.current
+      )
+      acct.reload
+      expected = atype == "expense" ? 50 : -50
+      assert_equal expected, acct.current_balance, "unexpected balance for #{atype}"
+    end
+  end
+
+  test "current_balance raises for unsupported account_type reader" do
+    acct = LedgerAccount.create!(
+      organization_id: SecureRandom.uuid,
+      environment: "sandbox",
+      external_account_id: "bad_type_#{SecureRandom.hex(4)}",
+      account_type: "asset",
+      currency: "USD"
+    )
+    acct.define_singleton_method(:account_type) { "bogus" }
+    err = assert_raises(ArgumentError) { acct.current_balance }
+    assert_match(/Unsupported account_type/, err.message)
+  end
+
   test "create_control_accounts returns three system accounts" do
     org = SecureRandom.uuid
     accounts = LedgerAccount.create_control_accounts(
