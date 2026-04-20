@@ -102,4 +102,5 @@ class ApiLedgerTransactionsTest < ActionDispatch::IntegrationTest
     assert_equal tx.id.to_s, body["id"]
     assert body["entries"].is_a?(Array)
   end
+
 end

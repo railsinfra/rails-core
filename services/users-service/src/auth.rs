@@ -351,13 +351,21 @@ fn hex_encode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::hash_api_key;
+    use crate::test_support::global_test_lock;
 
     #[test]
     fn hash_api_key_is_stable_for_same_input() {
+        let _lock = global_test_lock();
+        let saved = std::env::var("API_KEY_HASH_SECRET").ok();
+        std::env::set_var("API_KEY_HASH_SECRET", "unit_test_api_key_hash_secret_fixed");
         let a = hash_api_key("my-api-key").expect("hash");
         let b = hash_api_key("my-api-key").expect("hash");
         assert_eq!(a, b);
         assert_ne!(a, hash_api_key("other-key").expect("hash"));
         assert_eq!(a.len(), 64);
+        match saved {
+            Some(v) => std::env::set_var("API_KEY_HASH_SECRET", v),
+            None => std::env::remove_var("API_KEY_HASH_SECRET"),
+        }
     }
 }

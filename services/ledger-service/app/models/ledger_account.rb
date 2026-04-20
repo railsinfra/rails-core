@@ -49,7 +49,7 @@ class LedgerAccount < ApplicationRecord
     when 'liability', 'equity', 'income'
       -balance # Credits increase, debits decrease
     else
-      balance
+      raise ArgumentError, "Unsupported account_type: #{account_type.inspect}"
     end
   end
 
