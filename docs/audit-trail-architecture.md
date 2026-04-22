@@ -4,11 +4,11 @@ Central **append-only** audit ingest for Rails-Core. Domain services call **audi
 
 ## Database
 
-**Manual provisioning (v1):** Neon bootstrap scripts in this repo do **not** create `audit_db`. For local or hosted Postgres:
+**Neon (recommended for dev):** `make bootstrap` / `neon_bootstrap.py` provisions **`audit-db`** on the same Neon branch as users, accounts, and ledger, and writes **`AUDIT_DATABASE_URL`** into `.env`.
 
-- Create a database (e.g. `audit_db`) and role with `CREATE` on the schema.
-- Set `AUDIT_DATABASE_URL` in `.env` (see repository `.env.example`).
-- On first run, **audit-service** applies SQLx migrations (`services/audit-service/migrations/`), including append-only PostgreSQL `RULE`s on `audit_events`.
+**Manual / other hosts:** Create a database (e.g. `audit_db`) and role with `CREATE` on the schema, then set **`AUDIT_DATABASE_URL`** in `.env` (see `.env.example`).
+
+On first run, **audit-service** applies SQLx migrations (`services/audit-service/migrations/`), including append-only PostgreSQL `RULE`s on `audit_events`.
 
 Indexes (v1): `(organization_id, occurred_at)`, `(correlation_id)`, `(action)`.
 
@@ -82,7 +82,7 @@ sequenceDiagram
 ## Contract
 
 - **Proto:** `proto/audit/v1/audit.proto` — package `rails.core.audit.v1`, unary `AppendAuditEvent` only (no batch in v1).
-- **Delivery:** Emitters should call audit **after** the primary domain transaction commits, with a **400 ms** client deadline; failures after a successful domain commit must be visible in logs and Sentry (see RAI-14), without rolling back business data.
+- **Delivery:** Emitters should call audit **after** the primary domain transaction commits, with a configurable client deadline (`AUDIT_APPEND_TIMEOUT_MS`, default **5000 ms**); remote audit Postgres (e.g. Neon) often needs more than a sub-second budget. Failures after a successful domain commit must be visible in logs and Sentry (see RAI-14), without rolling back business data.
 
 ## Service layout
 

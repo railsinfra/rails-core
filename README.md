@@ -6,7 +6,7 @@
 
 **This project is**
 
-- Financial infrastructure backends (users, accounts, double-entry ledger)
+- Financial infrastructure backends (users, accounts, double-entry ledger, append-only audit ingest)
 - A multi-service system coordinated through an **nginx** gateway
 - A developer-first HTTP + gRPC API platform
 - **Local-dev first**: Docker Compose on your machine, external Postgres (for example Neon)
@@ -20,7 +20,7 @@
 
 ---
 
-Lean **financial infrastructure**: three services (Rust + Rails), an **nginx** gateway, **proto** contracts, **Docker Compose**, and **`.env.example`**.
+Lean **financial infrastructure**: four backend services (Rust + Rails), an **nginx** gateway, **proto** contracts, **Docker Compose**, and **`.env.example`**.
 
 ## Quick start
 
@@ -56,8 +56,9 @@ make dev
 | Users HTTP API (via gateway) | `http://localhost:8080/users/...` |
 | Accounts HTTP API (via gateway) | `http://localhost:8080/accounts/...` |
 | Ledger HTTP API (via gateway) | `http://localhost:8080/ledger/...` |
+| Audit health (via gateway) | [http://localhost:8080/audit/health](http://localhost:8080/audit/health) |
 
-Services speak to each other on the Docker network; you normally **do not** need separate host ports for each service. Everything goes through **:8080**.
+Services speak to each other on the Docker network; you normally **do not** need separate host ports for each service. Everything goes through **:8080**. Domain services call **audit-service** over gRPC for append-only events; that traffic stays on the internal Docker network (not exposed on the host by default).
 
 ### Stop the stack
 
@@ -67,7 +68,7 @@ Services speak to each other on the Docker network; you normally **do not** need
 | `make reset` | `docker compose down` (stops local containers; external DBs unchanged). |
 | `make stop` | Same as `make reset`. |
 | `make logs` | `docker compose logs -f` (requires `.env`; stack must already be running). |
-| `make reset-env`  | Rewrites `USERS_DATABASE_URL`, `ACCOUNTS_DATABASE_URL`, and `LEDGER_DATABASE_URL` in `.env` back to the placeholders from `.env.example`. Does **not** delete data in Neon. |
+| `make reset-env`  | Rewrites `USERS_DATABASE_URL`, `ACCOUNTS_DATABASE_URL`, `LEDGER_DATABASE_URL`, and `AUDIT_DATABASE_URL` in `.env` back to the placeholders from `.env.example`. Does **not** delete data in Neon. |
 | `make reset-neon` | Deletes the Neon **project** whose id is in `RAILS_CORE_NEON_PROJECT_ID` in `.env`, clears those database URL lines to placeholders, and strips Neon metadata keys. **Requires** `CONFIRM_PURGE_NEON=yes` in the environment, for example: `CONFIRM_PURGE_NEON=yes make reset-neon`. |
 
 
@@ -77,16 +78,17 @@ Services speak to each other on the Docker network; you normally **do not** need
 |--------|---------|
 | `make help` | List targets |
 | `make verify` | Assert service directories from `config/services.json` exist |
-| `make health` | HTTP smoke checks via the gateway: `/health`, `/users/health`, `/accounts/health`, `/ledger/health`, and `/docs/` |
-| `make test` | Gateway health JSON (`/health` + per-service paths: users/accounts `healthy`, ledger `ok`) plus contract flow users → accounts → ledger |
+| `make health` | HTTP smoke checks via the gateway: `/health`, `/users/health`, `/accounts/health`, `/ledger/health`, `/audit/health`, and `/docs/` |
+| `make test` | Same gateway health checks as `make health` (including `/audit/health`), then contract flow users → accounts → ledger |
 
-## Three services (short)
+## Services (short)
 
 | Service | Role |
 |--------|------|
 | **users-service** (Rust) | Businesses, environments, auth, API keys |
 | **accounts-service** (Rust) | Accounts, balances, transfers; talks to users + ledger over gRPC |
 | **ledger-service** (Rails) | Double-entry ledger over gRPC (and HTTP under `/ledger/`) |
+| **audit-service** (Rust) | Append-only audit trail ingest over gRPC; dedicated Postgres; health at `/audit/health` via gateway |
 
 ## Example API flow
 
@@ -154,7 +156,8 @@ rails-core/
 ├── services/
 │   ├── users-service/        # Rust: authentication, users, tenants
 │   ├── accounts-service/     # Rust: accounts, balances, transfers
-│   └── ledger-service/       # Rails: double-entry accounting system
+│   ├── ledger-service/       # Rails: double-entry accounting system
+│   └── audit-service/        # Rust: append-only audit ingest (gRPC + health HTTP)
 │
 ├── gateway/
 │   └── nginx.conf            # reverse proxy entrypoint
@@ -162,7 +165,8 @@ rails-core/
 ├── proto/
 │   ├── users.proto
 │   ├── accounts.proto
-│   └── ledger.proto
+│   ├── ledger.proto
+│   └── audit/v1/audit.proto
 │
 ├── config/
 │   └── services.json         # service paths (bootstrap, verify-layout)
@@ -182,6 +186,7 @@ rails-core/
 │
 ├── docs/
 │   ├── architecture.md
+│   ├── audit-trail-architecture.md
 │   ├── quickstart.md
 │   ├── index.html
 │   └── RAILWAY_DEPLOYMENT.md
@@ -198,6 +203,8 @@ rails-core/
 
 - [docs/architecture.md](docs/architecture.md) — diagram, boundaries, request flow  
 - [docs/quickstart.md](docs/quickstart.md) — clone → env → `make dev`  
+- [docs/audit-trail-architecture.md](docs/audit-trail-architecture.md) — audit-service, gRPC ingest, dedicated database  
+- [services/audit-service/README.md](services/audit-service/README.md) — runbook for the audit microservice  
 - [docs/RAILWAY_DEPLOYMENT.md](docs/RAILWAY_DEPLOYMENT.md) — optional Railway helper for Rust services  
 - [CONTRIBUTING.md](CONTRIBUTING.md) — how to change code and open a PR  
 
