@@ -31,6 +31,9 @@ tower = "0.5"
 tower-http = { version = "0.5", features = ["trace"] }
 
 [dev-dependencies]
+sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "migrate", "uuid"] }
+testcontainers = "0.23"
+testcontainers-modules = { version = "0.11", features = ["postgres"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 
 [build-dependencies]
