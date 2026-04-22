@@ -9,7 +9,10 @@ use axum::{
 use sqlx::PgPool;
 use std::sync::OnceLock;
 use std::time::Duration;
+use tonic::transport::Channel;
 use uuid::Uuid;
+
+use crate::grpc::audit_proto::audit_service_client::AuditServiceClient;
 
 use crate::handlers::{
     accounts::*,
@@ -27,13 +30,20 @@ pub struct AppState {
     pub pool: PgPool,
     pub ledger_grpc: LedgerGrpc,
     pub users_grpc: UsersGrpc,
+    pub audit_client: Option<AuditServiceClient<Channel>>,
 }
 
-pub fn create_router(pool: PgPool, ledger_grpc: LedgerGrpc, users_grpc: UsersGrpc) -> Router {
+pub fn create_router(
+    pool: PgPool,
+    ledger_grpc: LedgerGrpc,
+    users_grpc: UsersGrpc,
+    audit_client: Option<AuditServiceClient<Channel>>,
+) -> Router {
     let state = AppState {
         pool,
         ledger_grpc,
         users_grpc,
+        audit_client,
     };
     Router::<AppState>::new()
         .route("/", get(service_root))

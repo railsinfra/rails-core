@@ -7,6 +7,7 @@ pub struct Settings {
     pub grpc_port: u16,
     pub ledger_grpc_url: String,
     pub users_grpc_url: String,
+    pub audit_grpc_url: String,
     #[allow(dead_code)]
     pub host: String,
     pub log_level: String,
@@ -37,6 +38,9 @@ impl Settings {
         let users_grpc_url = std::env::var("USERS_GRPC_URL")
             .unwrap_or_else(|_| "http://127.0.0.1:50051".to_string());
 
+        let audit_grpc_url = std::env::var("AUDIT_GRPC_URL")
+            .unwrap_or_else(|_| "http://127.0.0.1:50054".to_string());
+
         let host = std::env::var("HOST")
             .unwrap_or_else(|_| "0.0.0.0".to_string());
 
@@ -53,6 +57,7 @@ impl Settings {
             grpc_port,
             ledger_grpc_url,
             users_grpc_url,
+            audit_grpc_url,
             host,
             log_level,
             sentry_dsn,

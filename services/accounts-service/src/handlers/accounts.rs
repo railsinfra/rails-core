@@ -1,14 +1,18 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
 use serde::{Deserialize, Deserializer};
+use std::collections::HashMap;
+use std::net::SocketAddr;
 use uuid::Uuid;
+
 use crate::errors::AppError;
+use crate::grpc::audit_proto::ActorType;
 use crate::models::{
-    AccountResponse, AccountTransactionResponse, CreateAccountRequest, PaginatedAccountsResponse,
-    UpdateAccountRequest,
+    Account, AccountResponse, AccountTransactionResponse, CreateAccountRequest,
+    PaginatedAccountsResponse, UpdateAccountRequest,
 };
 use crate::routes::api::AppState;
 use crate::services::AccountService;
@@ -60,8 +64,10 @@ pub(crate) fn extract_api_key(headers: &HeaderMap) -> Option<String> {
 pub async fn create_account(
     State(state): State<AppState>,
     headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(request): Json<CreateAccountRequest>,
 ) -> Result<(StatusCode, Json<AccountResponse>), AppError> {
+    let path = "/api/v1/accounts";
     let environment = extract_environment(&headers)?;
     let mut request = request;
     request.environment = Some(environment.clone());
@@ -73,24 +79,104 @@ pub async fn create_account(
         .map(|s| !s.trim().is_empty())
         .unwrap_or(false);
 
-    let account = if is_holder_path {
+    let org_hint_non_holder = request.organization_id;
+    let mut holder_org_on_err: Option<Uuid> = None;
+
+    let account_res: Result<Account, AppError> = if is_holder_path {
         let api_key = extract_api_key(&headers)
             .ok_or_else(|| AppError::Validation("X-API-Key header is required for holder-based account creation".to_string()))?;
-        let (organization_id, _environment_id, admin_user_id) = state
+        match state
             .users_grpc
             .validate_api_key(&api_key, &environment)
-            .await?;
-        AccountService::create_account_with_holder(
-            &state.pool,
-            request,
-            organization_id,
-            Some(admin_user_id),
-        )
-        .await?
+            .await
+        {
+            Ok((organization_id, _environment_id, admin_user_id)) => {
+                holder_org_on_err = Some(organization_id);
+                AccountService::create_account_with_holder(
+                    &state.pool,
+                    request,
+                    organization_id,
+                    Some(admin_user_id),
+                )
+                .await
+            }
+            Err(e) => Err(e),
+        }
     } else {
-        AccountService::create_account(&state.pool, request).await?
+        AccountService::create_account(&state.pool, request).await
     };
 
+    let mut meta = HashMap::new();
+    match &account_res {
+        Ok(account) => {
+            if let Some(org) = account.organization_id {
+                let (actor_type, actor_id) = if is_holder_path {
+                    let aid = account
+                        .admin_user_id
+                        .map(|u| u.to_string())
+                        .unwrap_or_default();
+                    (ActorType::User, aid)
+                } else if let Some(admin) = account.admin_user_id {
+                    (ActorType::User, admin.to_string())
+                } else if let Some(uid) = account.user_id {
+                    (ActorType::User, uid.to_string())
+                } else {
+                    (ActorType::Anonymous, String::new())
+                };
+                crate::audit_emit::emit_accounts_mutation(
+                    &state.audit_client,
+                    &headers,
+                    &peer,
+                    "POST",
+                    path,
+                    "accounts.account.create",
+                    org,
+                    actor_type,
+                    &actor_id,
+                    vec![],
+                    "account",
+                    account.id,
+                    201,
+                    None,
+                    meta,
+                )
+                .await;
+            }
+        }
+        Err(e) => {
+            meta.insert(
+                "http_status".into(),
+                crate::audit_emit::http_status_for_error(e).to_string(),
+            );
+            let org_opt = if is_holder_path {
+                holder_org_on_err
+            } else {
+                org_hint_non_holder
+            };
+            if let Some(org) = org_opt {
+                crate::audit_emit::emit_accounts_mutation(
+                    &state.audit_client,
+                    &headers,
+                    &peer,
+                    "POST",
+                    path,
+                    "accounts.account.create",
+                    org,
+                    ActorType::Anonymous,
+                    "",
+                    vec![],
+                    "account",
+                    Uuid::nil(),
+                    crate::audit_emit::http_status_for_error(e),
+                    Some(crate::audit_emit::truncate_reason(&e.to_string())),
+                    meta,
+                )
+                .await;
+            }
+        }
+    }
+
+    let account = account_res?;
     Ok((StatusCode::CREATED, Json(account.into())))
 }
 
@@ -156,26 +242,123 @@ pub async fn list_accounts(
 pub async fn update_account_status(
     State(state): State<AppState>,
     headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Path(id): Path<Uuid>,
     Json(request): Json<UpdateAccountRequest>,
 ) -> Result<Json<AccountResponse>, AppError> {
     let environment = extract_environment(&headers)?;
-    
+
     let status = request.status.ok_or_else(|| {
         AppError::Validation("status field is required".to_string())
     })?;
 
-    let account = AccountService::update_account_status(&state.pool, id, &environment, status).await?;
+    let path = format!("/api/v1/accounts/{id}");
+    let result =
+        AccountService::update_account_status(&state.pool, id, &environment, status).await;
+    let org = match &result {
+        Ok(account) => account.organization_id,
+        Err(_) => AccountService::get_account(&state.pool, id, &environment)
+            .await
+            .ok()
+            .and_then(|a| a.organization_id),
+    };
+    if let Some(org) = org {
+        let mut meta = HashMap::new();
+        if result.is_ok() {
+            meta.insert("new_status".into(), format!("{status:?}"));
+        } else if let Err(e) = &result {
+            meta.insert(
+                "http_status".into(),
+                crate::audit_emit::http_status_for_error(e).to_string(),
+            );
+        }
+        let http_st = match &result {
+            Ok(_) => 200u16,
+            Err(e) => crate::audit_emit::http_status_for_error(e),
+        };
+        let reason = result
+            .as_ref()
+            .err()
+            .map(|e| crate::audit_emit::truncate_reason(&e.to_string()));
+        crate::audit_emit::emit_accounts_mutation(
+            &state.audit_client,
+            &headers,
+            &peer,
+            "PATCH",
+            &path,
+            "accounts.account.update_status",
+            org,
+            ActorType::Anonymous,
+            "",
+            vec![],
+            "account",
+            id,
+            http_st,
+            reason,
+            meta,
+        )
+        .await;
+    }
+
+    let account = result?;
     Ok(Json(account.into()))
 }
 
 pub async fn close_account(
     State(state): State<AppState>,
     headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<AccountResponse>, AppError> {
     let environment = extract_environment(&headers)?;
-    let account = AccountService::close_account(&state.pool, id, &environment).await?;
+    let path = format!("/api/v1/accounts/{id}");
+    let result = AccountService::close_account(&state.pool, id, &environment).await;
+    let org = match &result {
+        Ok(account) => account.organization_id,
+        Err(_) => AccountService::get_account(&state.pool, id, &environment)
+            .await
+            .ok()
+            .and_then(|a| a.organization_id),
+    };
+    if let Some(org) = org {
+        let mut meta = HashMap::new();
+        if result.is_ok() {
+            meta.insert("new_status".into(), "closed".into());
+        } else if let Err(e) = &result {
+            meta.insert(
+                "http_status".into(),
+                crate::audit_emit::http_status_for_error(e).to_string(),
+            );
+        }
+        let http_st = match &result {
+            Ok(_) => 200u16,
+            Err(e) => crate::audit_emit::http_status_for_error(e),
+        };
+        let reason = result
+            .as_ref()
+            .err()
+            .map(|e| crate::audit_emit::truncate_reason(&e.to_string()));
+        crate::audit_emit::emit_accounts_mutation(
+            &state.audit_client,
+            &headers,
+            &peer,
+            "DELETE",
+            &path,
+            "accounts.account.close",
+            org,
+            ActorType::Anonymous,
+            "",
+            vec![],
+            "account",
+            id,
+            http_st,
+            reason,
+            meta,
+        )
+        .await;
+    }
+
+    let account = result?;
     Ok(Json(account.into()))
 }
 
@@ -183,10 +366,12 @@ pub async fn deposit(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(request): Json<crate::handlers::accounts::DepositRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     let environment = extract_environment(&headers)?;
-    
+    let path = format!("/api/v1/accounts/{id}/deposit");
+
     let idempotency_key = headers
         .get("Idempotency-Key")
         .and_then(|v: &axum::http::HeaderValue| v.to_str().ok())
@@ -204,7 +389,7 @@ pub async fn deposit(
         .map(|s: &str| s.trim().to_string())
         .filter(|s: &String| !s.is_empty());
 
-    let (account, transaction) = AccountService::deposit_with_idempotency(
+    let deposit_result = AccountService::deposit_with_idempotency(
         &state.pool,
         id,
         &environment,
@@ -216,7 +401,53 @@ pub async fn deposit(
         request.external_recipient_id.as_deref(),
         request.reference_id,
     )
-    .await?;
+    .await;
+
+    let org = match &deposit_result {
+        Ok((account, _)) => account.organization_id,
+        Err(_) => AccountService::get_account(&state.pool, id, &environment)
+            .await
+            .ok()
+            .and_then(|a| a.organization_id),
+    };
+    if let Some(org) = org {
+        let mut meta = HashMap::new();
+        meta.insert("idempotency_key_present".into(), "true".into());
+        if let Err(e) = &deposit_result {
+            meta.insert(
+                "http_status".into(),
+                crate::audit_emit::http_status_for_error(e).to_string(),
+            );
+        }
+        let http_st = match &deposit_result {
+            Ok(_) => 200u16,
+            Err(e) => crate::audit_emit::http_status_for_error(e),
+        };
+        let reason = deposit_result
+            .as_ref()
+            .err()
+            .map(|e| crate::audit_emit::truncate_reason(&e.to_string()));
+        crate::audit_emit::emit_accounts_mutation(
+            &state.audit_client,
+            &headers,
+            &peer,
+            "POST",
+            &path,
+            "accounts.money.deposit",
+            org,
+            ActorType::Anonymous,
+            "",
+            vec![],
+            "account",
+            id,
+            http_st,
+            reason,
+            meta,
+        )
+        .await;
+    }
+
+    let (account, transaction) = deposit_result?;
 
     let mut account_resp = AccountResponse::from(account.clone());
     if let Some(org_id) = account.organization_id {
@@ -247,10 +478,12 @@ pub async fn withdraw(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(request): Json<crate::handlers::accounts::WithdrawRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     let environment = extract_environment(&headers)?;
-    
+    let path = format!("/api/v1/accounts/{id}/withdraw");
+
     let idempotency_key = headers
         .get("Idempotency-Key")
         .and_then(|v: &axum::http::HeaderValue| v.to_str().ok())
@@ -268,7 +501,7 @@ pub async fn withdraw(
         .map(|s: &str| s.trim().to_string())
         .filter(|s: &String| !s.is_empty());
 
-    let (account, transaction) = AccountService::withdraw_with_idempotency(
+    let withdraw_result = AccountService::withdraw_with_idempotency(
         &state.pool,
         id,
         &environment,
@@ -280,7 +513,53 @@ pub async fn withdraw(
         request.external_recipient_id.as_deref(),
         request.reference_id,
     )
-    .await?;
+    .await;
+
+    let org = match &withdraw_result {
+        Ok((account, _)) => account.organization_id,
+        Err(_) => AccountService::get_account(&state.pool, id, &environment)
+            .await
+            .ok()
+            .and_then(|a| a.organization_id),
+    };
+    if let Some(org) = org {
+        let mut meta = HashMap::new();
+        meta.insert("idempotency_key_present".into(), "true".into());
+        if let Err(e) = &withdraw_result {
+            meta.insert(
+                "http_status".into(),
+                crate::audit_emit::http_status_for_error(e).to_string(),
+            );
+        }
+        let http_st = match &withdraw_result {
+            Ok(_) => 200u16,
+            Err(e) => crate::audit_emit::http_status_for_error(e),
+        };
+        let reason = withdraw_result
+            .as_ref()
+            .err()
+            .map(|e| crate::audit_emit::truncate_reason(&e.to_string()));
+        crate::audit_emit::emit_accounts_mutation(
+            &state.audit_client,
+            &headers,
+            &peer,
+            "POST",
+            &path,
+            "accounts.money.withdraw",
+            org,
+            ActorType::Anonymous,
+            "",
+            vec![],
+            "account",
+            id,
+            http_st,
+            reason,
+            meta,
+        )
+        .await;
+    }
+
+    let (account, transaction) = withdraw_result?;
 
     let mut account_resp = AccountResponse::from(account.clone());
     if let Some(org_id) = account.organization_id {
@@ -311,10 +590,12 @@ pub async fn transfer(
     State(state): State<AppState>,
     Path(from_id): Path<Uuid>,
     headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     Json(request): Json<crate::handlers::accounts::TransferRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     let environment = extract_environment(&headers)?;
-    
+    let path = format!("/api/v1/accounts/{from_id}/transfer");
+
     let idempotency_key = headers
         .get("Idempotency-Key")
         .and_then(|v: &axum::http::HeaderValue| v.to_str().ok())
@@ -332,7 +613,7 @@ pub async fn transfer(
         .map(|s: &str| s.trim().to_string())
         .filter(|s: &String| !s.is_empty());
 
-    let (from_account, to_account, transaction) = AccountService::transfer_with_idempotency(
+    let transfer_result = AccountService::transfer_with_idempotency(
         &state.pool,
         from_id,
         &environment,
@@ -345,7 +626,53 @@ pub async fn transfer(
         request.external_recipient_id.as_deref(),
         request.reference_id,
     )
-    .await?;
+    .await;
+
+    let org = match &transfer_result {
+        Ok((from_account, _, _)) => from_account.organization_id,
+        Err(_) => AccountService::get_account(&state.pool, from_id, &environment)
+            .await
+            .ok()
+            .and_then(|a| a.organization_id),
+    };
+    if let Some(org) = org {
+        let mut meta = HashMap::new();
+        meta.insert("idempotency_key_present".into(), "true".into());
+        if let Err(e) = &transfer_result {
+            meta.insert(
+                "http_status".into(),
+                crate::audit_emit::http_status_for_error(e).to_string(),
+            );
+        }
+        let http_st = match &transfer_result {
+            Ok(_) => 200u16,
+            Err(e) => crate::audit_emit::http_status_for_error(e),
+        };
+        let reason = transfer_result
+            .as_ref()
+            .err()
+            .map(|e| crate::audit_emit::truncate_reason(&e.to_string()));
+        crate::audit_emit::emit_accounts_mutation(
+            &state.audit_client,
+            &headers,
+            &peer,
+            "POST",
+            &path,
+            "accounts.money.transfer",
+            org,
+            ActorType::Anonymous,
+            "",
+            vec![],
+            "account",
+            from_id,
+            http_st,
+            reason,
+            meta,
+        )
+        .await;
+    }
+
+    let (from_account, to_account, transaction) = transfer_result?;
 
     let mut from_resp = AccountResponse::from(from_account.clone());
     let mut to_resp = AccountResponse::from(to_account.clone());
