@@ -34,6 +34,7 @@ SERVICE_DBS: tuple[tuple[str, str], ...] = (
     ("USERS_DATABASE_URL", "users-db"),
     ("ACCOUNTS_DATABASE_URL", "accounts-db"),
     ("LEDGER_DATABASE_URL", "ledger-db"),
+    ("AUDIT_DATABASE_URL", "audit-db"),
 )
 
 def _neon_msg(msg: str) -> None:
@@ -629,7 +630,9 @@ def action_clear_env(repo_root: Path) -> int:
     except Exception as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
-    print("Cleared USERS_/ACCOUNTS_/LEDGER_DATABASE_URL in .env (other keys unchanged).")
+    print(
+        "Cleared USERS_/ACCOUNTS_/LEDGER_/AUDIT_DATABASE_URL in .env (other keys unchanged)."
+    )
     return 0
 
 
@@ -753,7 +756,8 @@ def main() -> int:
     print(
         "error: no NEON_API_KEY and .env is missing usable database URLs.\n"
         "  Option A: export NEON_API_KEY=... then re-run make bootstrap\n"
-        "  Option B: cp .env.example .env and set USERS_DATABASE_URL, ACCOUNTS_DATABASE_URL, LEDGER_DATABASE_URL",
+        "  Option B: cp .env.example .env and set USERS_DATABASE_URL, ACCOUNTS_DATABASE_URL, "
+        "LEDGER_DATABASE_URL, AUDIT_DATABASE_URL",
         file=sys.stderr,
     )
     return 1
