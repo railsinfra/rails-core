@@ -21,6 +21,7 @@ jobs:
           USERS_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/users_ci
           ACCOUNTS_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/accounts_ci
           LEDGER_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ledger_ci
+          AUDIT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/audit_ci
         run: docker compose config --quiet
 
   rust-users:
@@ -55,7 +56,25 @@ jobs:
         with:
           workspaces: services/users-service
       - run: cargo clippy --locked --all-targets
-      - run: cargo test --locked
+      - run: cargo test --locked -- --include-ignored
+
+  rust-audit:
+    name: audit-service (clippy, test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/audit-service
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/audit-service
+      - run: cargo clippy --locked --all-targets
+      - run: cargo test --locked -- --include-ignored
 
   rust-accounts:
     name: accounts-service (clippy, test)
@@ -73,7 +92,7 @@ jobs:
         with:
           workspaces: services/accounts-service
       - run: cargo clippy --locked --all-targets
-      - run: cargo test --locked
+      - run: cargo test --locked -- --include-ignored
 
   ledger-rails:
     name: ledger-service (test)
@@ -149,6 +168,7 @@ jobs:
           workspaces: |
             services/users-service -> target
             services/accounts-service -> target
+            services/audit-service -> target
 
       - uses: taiki-e/install-action@v2
         with:
@@ -167,13 +187,23 @@ jobs:
           mkdir -p "${GITHUB_WORKSPACE}/coverage-rust"
           cargo llvm-cov test --locked --lcov --output-path "${GITHUB_WORKSPACE}/coverage-rust/users.lcov.info" \
             --fail-under-lines 90 \
-            --ignore-filename-regex '(^|/)src/(main|bootstrap)\.rs$'
+            --ignore-filename-regex '(^|/)src/(main|bootstrap)\.rs$' \
+            -- --include-ignored
 
       - name: Rust coverage (accounts-service)
         working-directory: services/accounts-service
         run: |
           mkdir -p "${GITHUB_WORKSPACE}/coverage-rust"
-          cargo llvm-cov test --locked --lcov --output-path "${GITHUB_WORKSPACE}/coverage-rust/accounts.lcov.info"
+          cargo llvm-cov test --locked --lcov --output-path "${GITHUB_WORKSPACE}/coverage-rust/accounts.lcov.info" \
+            -- --include-ignored
+
+      - name: Rust coverage (audit-service)
+        working-directory: services/audit-service
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/coverage-rust"
+          cargo llvm-cov test --locked --lcov --output-path "${GITHUB_WORKSPACE}/coverage-rust/audit.lcov.info" \
+            --ignore-filename-regex '(^|/)src/main\.rs$' \
+            -- --include-ignored
 
       - uses: ruby/setup-ruby@v1
         with:
@@ -196,6 +226,7 @@ jobs:
           files: >-
             coverage-rust/users.lcov.info,
             coverage-rust/accounts.lcov.info,
+            coverage-rust/audit.lcov.info,
             services/ledger-service/coverage/lcov.info
 
       # - name: SonarQube Scan
