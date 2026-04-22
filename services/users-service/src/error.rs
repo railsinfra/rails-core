@@ -27,6 +27,20 @@ pub enum AppError {
     Internal,
 }
 
+impl AppError {
+    /// HTTP status for this error (keeps parity with [`IntoResponse`]).
+    pub fn status_code(&self) -> u16 {
+        match self {
+            AppError::Unauthorized => StatusCode::UNAUTHORIZED.as_u16(),
+            AppError::Forbidden | AppError::UnrecognizedSource => StatusCode::FORBIDDEN.as_u16(),
+            AppError::TooManyRequests => StatusCode::TOO_MANY_REQUESTS.as_u16(),
+            AppError::BadRequest(_) => StatusCode::BAD_REQUEST.as_u16(),
+            AppError::Conflict(_) => StatusCode::CONFLICT.as_u16(),
+            AppError::Internal => StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+        }
+    }
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, code, details, should_report) = match &self {

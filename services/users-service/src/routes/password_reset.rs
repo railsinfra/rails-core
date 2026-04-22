@@ -1,7 +1,15 @@
 //! Password reset endpoints
 //! Secure, single-use, time-limited password reset flow
 
+use std::collections::HashMap;
+use std::net::SocketAddr;
+
+use axum::extract::ConnectInfo;
+use axum::http::HeaderMap;
 use axum::{Json, extract::State};
+
+use crate::audit_emit;
+use crate::grpc::audit_proto::ActorType;
 use argon2::{Argon2, PasswordHasher};
 use argon2::password_hash::{rand_core::{OsRng, RngCore}, SaltString};
 use chrono::{Utc, Duration};
@@ -36,13 +44,15 @@ pub struct ResetPasswordResponse {
     pub message: String,
 }
 
-/// Request password reset
-/// Always returns success to prevent user enumeration
-/// If user exists, generates token and sends email
-pub async fn request_password_reset(
-    State(state): State<AppState>,
-    Json(payload): Json<RequestPasswordResetRequest>
-) -> Result<Json<RequestPasswordResetResponse>, AppError> {
+enum PasswordResetRequestOutcome {
+    NoSuchUser,
+    Issued { user_id: Uuid, business_id: Uuid },
+}
+
+async fn request_password_reset_inner(
+    state: AppState,
+    Json(payload): Json<RequestPasswordResetRequest>,
+) -> Result<(RequestPasswordResetResponse, PasswordResetRequestOutcome), AppError> {
     // Always return success to prevent user enumeration
     // This is a security best practice
     
@@ -61,9 +71,13 @@ pub async fn request_password_reset(
         Some(row) => row.get("id"),
         None => {
             tracing::info!("Password reset requested for non-existent account");
-            return Ok(Json(RequestPasswordResetResponse {
-                message: "If an account exists with that email, a password reset link has been sent.".to_string(),
-            }));
+            return Ok((
+                RequestPasswordResetResponse {
+                    message: "If an account exists with that email, a password reset link has been sent."
+                        .to_string(),
+                },
+                PasswordResetRequestOutcome::NoSuchUser,
+            ));
         }
     };
 
@@ -124,9 +138,97 @@ pub async fn request_password_reset(
         tracing::warn!("Email service not configured, password reset email not sent");
     }
 
-    Ok(Json(RequestPasswordResetResponse {
-        message: "If an account exists with that email, a password reset link has been sent.".to_string(),
-    }))
+    let biz_row = sqlx::query("SELECT business_id FROM users WHERE id = $1")
+        .bind(&user_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| AppError::Internal)?;
+    let business_id: Uuid = biz_row.get("business_id");
+
+    Ok((
+        RequestPasswordResetResponse {
+            message: "If an account exists with that email, a password reset link has been sent.".to_string(),
+        },
+        PasswordResetRequestOutcome::Issued {
+            user_id,
+            business_id,
+        },
+    ))
+}
+
+/// Request password reset
+/// Always returns success to prevent user enumeration
+/// If user exists, generates token and sends email
+pub async fn request_password_reset(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(payload): Json<RequestPasswordResetRequest>,
+) -> Result<Json<RequestPasswordResetResponse>, AppError> {
+    let path = "/api/v1/auth/password-reset/request";
+    let mut meta = HashMap::new();
+    match request_password_reset_inner(state.clone(), Json(payload)).await {
+        Ok((body, outcome)) => {
+            let (org, actor, actor_id, tgt) = match &outcome {
+                PasswordResetRequestOutcome::NoSuchUser => {
+                    (Uuid::nil(), ActorType::Anonymous, String::new(), Uuid::nil())
+                }
+                PasswordResetRequestOutcome::Issued {
+                    user_id,
+                    business_id,
+                } => (
+                    *business_id,
+                    ActorType::User,
+                    user_id.to_string(),
+                    *user_id,
+                ),
+            };
+            audit_emit::emit_users_mutation(
+                &state.grpc,
+                &headers,
+                &peer,
+                "POST",
+                path,
+                "users.password_reset.request",
+                org,
+                actor,
+                &actor_id,
+                vec![],
+                "user",
+                tgt,
+                200,
+                None,
+                meta,
+            )
+            .await;
+            Ok(Json(body))
+        }
+        Err(e) => {
+            meta.insert(
+                "http_status".into(),
+                audit_emit::http_status_for_error(&e).to_string(),
+            );
+            audit_emit::emit_users_mutation(
+                &state.grpc,
+                &headers,
+                &peer,
+                "POST",
+                path,
+                "users.password_reset.request",
+                Uuid::nil(),
+                ActorType::Anonymous,
+                "",
+                vec![],
+                "user",
+                Uuid::nil(),
+                audit_emit::http_status_for_error(&e),
+                Some(audit_emit::truncate_reason(&e.to_string())),
+                meta,
+            )
+            .await;
+            Err(e)
+        }
+    }
 }
 
 fn generate_reset_token() -> String {
@@ -167,10 +269,10 @@ mod tests {
 
 /// Reset password using token
 /// Validates token, updates password, marks token as used
-pub async fn reset_password(
-    State(state): State<AppState>,
-    Json(payload): Json<ResetPasswordRequest>
-) -> Result<Json<ResetPasswordResponse>, AppError> {
+async fn reset_password_inner(
+    state: AppState,
+    Json(payload): Json<ResetPasswordRequest>,
+) -> Result<(ResetPasswordResponse, Uuid, Uuid), AppError> {
     // Hash the incoming token to compare with stored hash
     let mut hasher = Sha256::new();
     hasher.update(payload.token.as_bytes());
@@ -207,6 +309,13 @@ pub async fn reset_password(
         }
     };
 
+    let business_row = sqlx::query("SELECT business_id FROM users WHERE id = $1")
+        .bind(&user_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|_| AppError::Internal)?;
+    let business_id: Uuid = business_row.get("business_id");
+
     // Update user password
     sqlx::query(
         "UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3"
@@ -241,9 +350,71 @@ pub async fn reset_password(
 
     tracing::info!("Password reset successful for user {}", user_id);
 
-    Ok(Json(ResetPasswordResponse {
-        message: "Password has been reset successfully. You can now log in with your new password.".to_string(),
-    }))
+    Ok((
+        ResetPasswordResponse {
+            message: "Password has been reset successfully. You can now log in with your new password.".to_string(),
+        },
+        user_id,
+        business_id,
+    ))
+}
+
+pub async fn reset_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(payload): Json<ResetPasswordRequest>,
+) -> Result<Json<ResetPasswordResponse>, AppError> {
+    let path = "/api/v1/auth/password-reset/reset";
+    let mut meta = HashMap::new();
+    match reset_password_inner(state.clone(), Json(payload)).await {
+        Ok((body, uid, bid)) => {
+            audit_emit::emit_users_mutation(
+                &state.grpc,
+                &headers,
+                &peer,
+                "POST",
+                path,
+                "users.password_reset.complete",
+                bid,
+                ActorType::User,
+                &uid.to_string(),
+                vec![],
+                "user",
+                uid,
+                200,
+                None,
+                meta,
+            )
+            .await;
+            Ok(Json(body))
+        }
+        Err(e) => {
+            meta.insert(
+                "http_status".into(),
+                audit_emit::http_status_for_error(&e).to_string(),
+            );
+            audit_emit::emit_users_mutation(
+                &state.grpc,
+                &headers,
+                &peer,
+                "POST",
+                path,
+                "users.password_reset.complete",
+                Uuid::nil(),
+                ActorType::Anonymous,
+                "",
+                vec![],
+                "user",
+                Uuid::nil(),
+                audit_emit::http_status_for_error(&e),
+                Some(audit_emit::truncate_reason(&e.to_string())),
+                meta,
+            )
+            .await;
+            Err(e)
+        }
+    }
 }
 
 fn claim_token_sql() -> &'static str {

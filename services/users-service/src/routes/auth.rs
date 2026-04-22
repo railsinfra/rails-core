@@ -1,4 +1,12 @@
+use std::collections::HashMap;
+use std::net::SocketAddr;
+
+use axum::extract::ConnectInfo;
+use axum::http::HeaderMap;
 use axum::{Json, extract::State};
+
+use crate::audit_emit;
+use crate::grpc::audit_proto::ActorType;
 use argon2::password_hash::rand_core::OsRng;
 use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
 use base64::engine::Engine;
@@ -65,10 +73,10 @@ use chrono::{Utc, Duration};
 use uuid::Uuid;
 use serde_json::json;
 
-pub async fn login(
-    State(state): State<AppState>,
-    Json(payload): Json<LoginRequest>
-) -> Result<Json<LoginResponse>, AppError> {
+async fn login_inner(
+    state: AppState,
+    Json(payload): Json<LoginRequest>,
+) -> Result<(LoginResponse, Uuid, Uuid), AppError> {
     let email_normalized = user::normalize_email(&payload.email);
     // Optimized: Get active users with their environment_ids and business_id in one query
     let user_rows = sqlx::query(
@@ -203,19 +211,81 @@ pub async fn login(
         AppError::Internal
     })?;
 
-    Ok(Json(LoginResponse {
-        access_token,
-        refresh_token,
-        expires_in: 900,
-        selected_environment_id,
-        environments: available_envs,
-    }))
+    Ok((
+        LoginResponse {
+            access_token,
+            refresh_token,
+            expires_in: 900,
+            selected_environment_id,
+            environments: available_envs,
+        },
+        user_id,
+        business_id,
+    ))
 }
 
-pub async fn refresh_token(
+pub async fn login(
     State(state): State<AppState>,
-    Json(payload): Json<RefreshTokenRequest>
-) -> Result<Json<RefreshTokenResponse>, AppError> {
+    headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(payload): Json<LoginRequest>,
+) -> Result<Json<LoginResponse>, AppError> {
+    let path = "/api/v1/auth/login";
+    let mut meta = HashMap::new();
+    match login_inner(state.clone(), Json(payload)).await {
+        Ok((lr, uid, bid)) => {
+            audit_emit::emit_users_mutation(
+                &state.grpc,
+                &headers,
+                &peer,
+                "POST",
+                path,
+                "users.auth.login",
+                bid,
+                ActorType::User,
+                &uid.to_string(),
+                vec![],
+                "user",
+                uid,
+                200,
+                None,
+                meta,
+            )
+            .await;
+            Ok(Json(lr))
+        }
+        Err(e) => {
+            meta.insert(
+                "http_status".into(),
+                audit_emit::http_status_for_error(&e).to_string(),
+            );
+            audit_emit::emit_users_mutation(
+                &state.grpc,
+                &headers,
+                &peer,
+                "POST",
+                path,
+                "users.auth.login",
+                Uuid::nil(),
+                ActorType::Anonymous,
+                "",
+                vec![],
+                "user",
+                Uuid::nil(),
+                audit_emit::http_status_for_error(&e),
+                Some(audit_emit::truncate_reason(&e.to_string())),
+                meta,
+            )
+            .await;
+            Err(e)
+        }
+    }
+}
+
+async fn refresh_token_inner(
+    state: AppState,
+    Json(payload): Json<RefreshTokenRequest>,
+) -> Result<(RefreshTokenResponse, Uuid, Uuid), AppError> {
     // 1. Find session by refresh token
     let rec = sqlx::query(
         "SELECT id, user_id, environment_id, jwt_id, status, expires_at FROM user_sessions WHERE refresh_token = $1"
@@ -295,20 +365,95 @@ pub async fn refresh_token(
     .map_err(|_| AppError::Internal)?;
     tx.commit().await.map_err(|_| AppError::Internal)?;
 
-    Ok(Json(RefreshTokenResponse {
-        access_token,
-        refresh_token: new_refresh_token,
-        expires_in: 900,
-    }))
+    Ok((
+        RefreshTokenResponse {
+            access_token,
+            refresh_token: new_refresh_token,
+            expires_in: 900,
+        },
+        user_id,
+        business_id,
+    ))
 }
 
-pub async fn revoke_token(
+pub async fn refresh_token(
     State(state): State<AppState>,
-    Json(payload): Json<RevokeTokenRequest>
-) -> Result<Json<RevokeTokenResponse>, AppError> {
+    headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(payload): Json<RefreshTokenRequest>,
+) -> Result<Json<RefreshTokenResponse>, AppError> {
+    let path = "/api/v1/auth/refresh";
+    let mut meta = HashMap::new();
+    match refresh_token_inner(state.clone(), Json(payload)).await {
+        Ok((body, uid, bid)) => {
+            audit_emit::emit_users_mutation(
+                &state.grpc,
+                &headers,
+                &peer,
+                "POST",
+                path,
+                "users.auth.refresh",
+                bid,
+                ActorType::User,
+                &uid.to_string(),
+                vec![],
+                "user",
+                uid,
+                200,
+                None,
+                meta,
+            )
+            .await;
+            Ok(Json(body))
+        }
+        Err(e) => {
+            meta.insert(
+                "http_status".into(),
+                audit_emit::http_status_for_error(&e).to_string(),
+            );
+            audit_emit::emit_users_mutation(
+                &state.grpc,
+                &headers,
+                &peer,
+                "POST",
+                path,
+                "users.auth.refresh",
+                Uuid::nil(),
+                ActorType::Anonymous,
+                "",
+                vec![],
+                "session",
+                Uuid::nil(),
+                audit_emit::http_status_for_error(&e),
+                Some(audit_emit::truncate_reason(&e.to_string())),
+                meta,
+            )
+            .await;
+            Err(e)
+        }
+    }
+}
+
+async fn revoke_token_inner(
+    state: AppState,
+    Json(payload): Json<RevokeTokenRequest>,
+) -> Result<(RevokeTokenResponse, Uuid, Uuid), AppError> {
     let now = Utc::now();
+    let row = sqlx::query(
+        "SELECT s.user_id, u.business_id FROM user_sessions s JOIN users u ON u.id = s.user_id WHERE s.refresh_token = $1 AND s.status = 'active'",
+    )
+    .bind(&payload.refresh_token)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|_| AppError::Internal)?;
+    let row = row.ok_or_else(|| {
+        AppError::BadRequest("Token not found or already revoked".to_string())
+    })?;
+    let user_id: Uuid = row.get("user_id");
+    let business_id: Uuid = row.get("business_id");
+
     let result = sqlx::query(
-        "UPDATE user_sessions SET status = 'revoked', revoked_at = $1 WHERE refresh_token = $2 AND status = 'active'"
+        "UPDATE user_sessions SET status = 'revoked', revoked_at = $1 WHERE refresh_token = $2 AND status = 'active'",
     )
     .bind(&now)
     .bind(&payload.refresh_token)
@@ -316,11 +461,76 @@ pub async fn revoke_token(
     .await
     .map_err(|_| AppError::Internal)?;
     if result.rows_affected() == 0 {
-        return Err(AppError::BadRequest("Token not found or already revoked".to_string()));
+        return Err(AppError::BadRequest(
+            "Token not found or already revoked".to_string(),
+        ));
     }
-    Ok(Json(RevokeTokenResponse {
-        status: "revoked".to_string(),
-    }))
+    Ok((
+        RevokeTokenResponse {
+            status: "revoked".to_string(),
+        },
+        user_id,
+        business_id,
+    ))
+}
+
+pub async fn revoke_token(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(payload): Json<RevokeTokenRequest>,
+) -> Result<Json<RevokeTokenResponse>, AppError> {
+    let path = "/api/v1/auth/revoke";
+    let mut meta = HashMap::new();
+    match revoke_token_inner(state.clone(), Json(payload)).await {
+        Ok((body, uid, bid)) => {
+            audit_emit::emit_users_mutation(
+                &state.grpc,
+                &headers,
+                &peer,
+                "POST",
+                path,
+                "users.auth.revoke",
+                bid,
+                ActorType::User,
+                &uid.to_string(),
+                vec![],
+                "user",
+                uid,
+                200,
+                None,
+                meta,
+            )
+            .await;
+            Ok(Json(body))
+        }
+        Err(e) => {
+            meta.insert(
+                "http_status".into(),
+                audit_emit::http_status_for_error(&e).to_string(),
+            );
+            let org = Uuid::nil();
+            audit_emit::emit_users_mutation(
+                &state.grpc,
+                &headers,
+                &peer,
+                "POST",
+                path,
+                "users.auth.revoke",
+                org,
+                ActorType::Anonymous,
+                "",
+                vec![],
+                "session",
+                Uuid::nil(),
+                audit_emit::http_status_for_error(&e),
+                Some(audit_emit::truncate_reason(&e.to_string())),
+                meta,
+            )
+            .await;
+            Err(e)
+        }
+    }
 }
 
 #[cfg(test)]

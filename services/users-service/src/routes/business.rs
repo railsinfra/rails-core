@@ -1,5 +1,13 @@
+use std::collections::HashMap;
+use std::net::SocketAddr;
+
+use axum::extract::ConnectInfo;
+use axum::http::HeaderMap;
 use axum::{Json, extract::State};
 use uuid::Uuid;
+
+use crate::audit_emit;
+use crate::grpc::audit_proto::ActorType;
 use chrono::{Utc, Duration};
 use crate::error::{AppError, DUPLICATE_EMAIL_MESSAGE};
 use crate::routes::{AppState, user};
@@ -40,9 +48,9 @@ pub struct EnvironmentInfo {
     pub r#type: String
 }
 
-pub async fn register_business(
-    State(state): State<AppState>,
-    Json(payload): Json<RegisterBusinessRequest>
+async fn register_business_inner(
+    state: AppState,
+    Json(payload): Json<RegisterBusinessRequest>,
 ) -> Result<Json<RegisterBusinessResponse>, AppError> {
     let admin_email_normalized = user::normalize_email(&payload.admin_email);
     if admin_email_normalized.is_empty() {
@@ -192,11 +200,70 @@ pub async fn register_business(
     }))
 }
 
+pub async fn register_business(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(payload): Json<RegisterBusinessRequest>,
+) -> Result<Json<RegisterBusinessResponse>, AppError> {
+    let path = "/api/v1/business/register";
+    let out = register_business_inner(state.clone(), Json(payload)).await;
+    let mut meta = HashMap::new();
+    match &out {
+        Ok(j) => {
+            audit_emit::emit_users_mutation(
+                &state.grpc,
+                &headers,
+                &peer,
+                "POST",
+                path,
+                "users.business.register",
+                j.0.business_id,
+                ActorType::User,
+                &j.0.admin_user_id.to_string(),
+                vec!["admin".to_string()],
+                "business",
+                j.0.business_id,
+                200,
+                None,
+                meta,
+            )
+            .await;
+        }
+        Err(e) => {
+            meta.insert(
+                "http_status".into(),
+                audit_emit::http_status_for_error(e).to_string(),
+            );
+            audit_emit::emit_users_mutation(
+                &state.grpc,
+                &headers,
+                &peer,
+                "POST",
+                path,
+                "users.business.register",
+                Uuid::nil(),
+                ActorType::Anonymous,
+                "",
+                vec![],
+                "business",
+                Uuid::nil(),
+                audit_emit::http_status_for_error(e),
+                Some(audit_emit::truncate_reason(&e.to_string())),
+                meta,
+            )
+            .await;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::error::DUPLICATE_EMAIL_MESSAGE;
     use crate::grpc::GrpcClients;
+    use crate::test_support::test_connect_info;
     use sqlx::postgres::PgPoolOptions;
 
     async fn test_pool() -> Option<sqlx::PgPool> {
@@ -232,14 +299,18 @@ mod tests {
         };
         let state = AppState {
             db: pool.clone(),
-            grpc: GrpcClients {
-                accounts_client: None,
-            },
+            grpc: GrpcClients::none(),
             email: None,
         };
         let email = format!("unique+{}@example.com", Uuid::new_v4());
         let payload = unique_business_payload(&email);
-        let result = register_business(State(state), Json(payload)).await;
+        let result = register_business(
+            State(state),
+            HeaderMap::new(),
+            test_connect_info(),
+            Json(payload),
+        )
+        .await;
         assert!(result.is_ok(), "Unique email registration should succeed: {:?}", result.err());
     }
 
@@ -256,17 +327,30 @@ mod tests {
         let payload1 = unique_business_payload(&email);
         let state1 = AppState {
             db: pool.clone(),
-            grpc: GrpcClients { accounts_client: None },
+            grpc: GrpcClients::none(),
             email: None,
         };
-        let _ = register_business(State(state1), Json(payload1)).await.expect("first register must succeed");
+        let _ = register_business(
+            State(state1),
+            HeaderMap::new(),
+            test_connect_info(),
+            Json(payload1),
+        )
+        .await
+        .expect("first register must succeed");
         let payload2 = unique_business_payload(&email);
         let state2 = AppState {
             db: pool.clone(),
-            grpc: GrpcClients { accounts_client: None },
+            grpc: GrpcClients::none(),
             email: None,
         };
-        let result = register_business(State(state2), Json(payload2)).await;
+        let result = register_business(
+            State(state2),
+            HeaderMap::new(),
+            test_connect_info(),
+            Json(payload2),
+        )
+        .await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         if let AppError::Conflict(msg) = err {
@@ -289,17 +373,30 @@ mod tests {
         let payload1 = unique_business_payload(&base);
         let state1 = AppState {
             db: pool.clone(),
-            grpc: GrpcClients { accounts_client: None },
+            grpc: GrpcClients::none(),
             email: None,
         };
-        let _ = register_business(State(state1), Json(payload1)).await.expect("first register must succeed");
+        let _ = register_business(
+            State(state1),
+            HeaderMap::new(),
+            test_connect_info(),
+            Json(payload1),
+        )
+        .await
+        .expect("first register must succeed");
         let payload2 = unique_business_payload(&base.to_uppercase());
         let state2 = AppState {
             db: pool.clone(),
-            grpc: GrpcClients { accounts_client: None },
+            grpc: GrpcClients::none(),
             email: None,
         };
-        let result = register_business(State(state2), Json(payload2)).await;
+        let result = register_business(
+            State(state2),
+            HeaderMap::new(),
+            test_connect_info(),
+            Json(payload2),
+        )
+        .await;
         assert!(result.is_err(), "Case-insensitive duplicate should be blocked");
         let err = result.unwrap_err();
         assert!(matches!(err, AppError::Conflict(_)), "Expected Conflict for case variant: {:?}", err);

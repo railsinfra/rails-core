@@ -1,8 +1,8 @@
 //! PostgreSQL-backed integration tests. Set `DATABASE_URL` (e.g. CI or local Postgres).
 
 use axum::body::{to_bytes, Body};
-use axum::extract::{FromRequestParts, State};
-use axum::http::{header, Request, StatusCode};
+use axum::extract::{ConnectInfo, FromRequestParts, State};
+use axum::http::{header, HeaderMap, Request, StatusCode};
 use axum::Json;
 use chrono::Utc;
 use serde_json::json;
@@ -31,6 +31,7 @@ use users_service::routes::password_reset::{
 };
 use users_service::routes::user::me;
 use users_service::routes::{register_routes, AppState};
+use users_service::test_support::test_connect_info;
 
 fn env_lock() -> std::sync::MutexGuard<'static, ()> {
     users_service::test_support::global_test_lock()
@@ -50,6 +51,10 @@ async fn test_pool() -> Option<sqlx::PgPool> {
 
 fn grpc_none() -> GrpcClients {
     GrpcClients::none()
+}
+
+fn hdr_empty() -> HeaderMap {
+    HeaderMap::new()
 }
 
 fn empty_request_parts() -> axum::http::request::Parts {
@@ -112,9 +117,14 @@ async fn register_login_me_refresh_revoke_api_keys_and_grpc_validate() {
         email: None,
     };
 
-    let reg = register_business(State(state.clone()), Json(register_payload(&email)))
-        .await
-        .expect("register_business");
+    let reg = register_business(
+        State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
+        Json(register_payload(&email)),
+    )
+    .await
+    .expect("register_business");
     let body = reg.0;
     let sandbox_id = body
         .environments
@@ -131,6 +141,8 @@ async fn register_login_me_refresh_revoke_api_keys_and_grpc_validate() {
 
     let login_sandbox = login(
         State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
         Json(LoginRequest {
             email: email.clone(),
             password: "password123!".into(),
@@ -144,6 +156,8 @@ async fn register_login_me_refresh_revoke_api_keys_and_grpc_validate() {
 
     let wrong_pw = login(
         State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
         Json(LoginRequest {
             email: email.clone(),
             password: "wrong-password".into(),
@@ -212,6 +226,8 @@ async fn register_login_me_refresh_revoke_api_keys_and_grpc_validate() {
 
     let key_resp = create_api_key(
         State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
         ctx,
         Json(CreateApiKeyRequest {
             environment_id: Some(sandbox_id),
@@ -261,6 +277,8 @@ async fn register_login_me_refresh_revoke_api_keys_and_grpc_validate() {
 
     let refreshed = refresh_token(
         State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
         Json(RefreshTokenRequest {
             refresh_token: refresh.clone(),
         }),
@@ -269,6 +287,8 @@ async fn register_login_me_refresh_revoke_api_keys_and_grpc_validate() {
     .expect("refresh");
     let bad_refresh = refresh_token(
         State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
         Json(RefreshTokenRequest {
             refresh_token: "not-a-real-token".into(),
         }),
@@ -279,6 +299,8 @@ async fn register_login_me_refresh_revoke_api_keys_and_grpc_validate() {
     let new_rt = refreshed.0.refresh_token.clone();
     let _ = revoke_token(
         State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
         Json(RevokeTokenRequest {
             refresh_token: new_rt.clone(),
         }),
@@ -288,6 +310,8 @@ async fn register_login_me_refresh_revoke_api_keys_and_grpc_validate() {
 
     let revoke_twice = revoke_token(
         State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
         Json(RevokeTokenRequest {
             refresh_token: new_rt,
         }),
@@ -337,6 +361,8 @@ async fn register_login_me_refresh_revoke_api_keys_and_grpc_validate() {
         .expect("ctx for revoke key");
     let bad_env_key = create_api_key(
         State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
         ctx_revoke,
         Json(CreateApiKeyRequest {
             environment_id: Some(Uuid::new_v4()),
@@ -356,9 +382,15 @@ async fn register_login_me_refresh_revoke_api_keys_and_grpc_validate() {
     let ctx_r = AuthContext::from_request_parts(&mut jwt_ctx2, &state)
         .await
         .unwrap();
-    let _ = revoke_api_key(State(state.clone()), ctx_r, axum::extract::Path(key_resp.0.id))
-        .await
-        .expect("revoke api key");
+    let _ = revoke_api_key(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        ctx_r,
+        axum::extract::Path(key_resp.0.id),
+    )
+    .await
+    .expect("revoke api key");
 
     let revoked_grpc = grpc
         .validate_api_key(tonic::Request::new(ValidateApiKeyRequest {
@@ -388,7 +420,7 @@ async fn register_business_rejects_empty_admin_email() {
     };
     let mut req = register_payload(&format!("x+{}@example.com", Uuid::new_v4()));
     req.admin_email = "   ".into();
-    let err = register_business(State(state), Json(req))
+    let err = register_business(State(state), hdr_empty(), test_connect_info(), Json(req))
         .await
         .expect_err("empty email");
     assert!(matches!(err, AppError::BadRequest(_)));
@@ -413,12 +445,19 @@ async fn password_reset_happy_and_failure_paths() {
         grpc: grpc_none(),
         email: None,
     };
-    let _ = register_business(State(state.clone()), Json(register_payload(&email)))
-        .await
-        .expect("register");
+    let _ = register_business(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        Json(register_payload(&email)),
+    )
+    .await
+    .expect("register");
 
     let _ = request_password_reset(
         State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
         Json(RequestPasswordResetRequest {
             email: email.clone(),
         }),
@@ -428,6 +467,8 @@ async fn password_reset_happy_and_failure_paths() {
 
     let unknown = request_password_reset(
         State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
         Json(RequestPasswordResetRequest {
             email: "nobody-here@example.com".into(),
         }),
@@ -438,6 +479,8 @@ async fn password_reset_happy_and_failure_paths() {
 
     let short_pw = reset_password(
         State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
         Json(ResetPasswordRequest {
             token: "any".into(),
             new_password: "short".into(),
@@ -448,6 +491,8 @@ async fn password_reset_happy_and_failure_paths() {
 
     let bad_tok = reset_password(
         State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
         Json(ResetPasswordRequest {
             token: "not-valid-token-xxxxxxxxxxxxxxxx".into(),
             new_password: "longenough1!".into(),
@@ -486,10 +531,21 @@ async fn beta_apply_conflict_on_duplicate_email() {
         company: "C".into(),
         use_case: "U".into(),
     };
-    let _ = apply_for_beta(State(state.clone()), Json(payload1))
-        .await
-        .expect("first beta");
-    let second = apply_for_beta(State(state), Json(payload2)).await;
+    let _ = apply_for_beta(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        Json(payload1),
+    )
+    .await
+    .expect("first beta");
+    let second = apply_for_beta(
+        State(state),
+        hdr_empty(),
+        test_connect_info(),
+        Json(payload2),
+    )
+    .await;
     assert!(matches!(second, Err(AppError::Conflict(_))));
 }
 
@@ -509,36 +565,22 @@ async fn http_router_health_and_correlation_header() {
     let app = register_routes(pool, grpc_none(), None);
     let mut svc = app.into_service();
 
-    let health = svc
-        .ready()
-        .await
-        .unwrap()
-        .call(
-            Request::builder()
-                .uri("/health")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9));
+    let mut health_req = Request::builder().uri("/health").body(Body::empty()).unwrap();
+    health_req.extensions_mut().insert(ConnectInfo(peer));
+    let health = svc.ready().await.unwrap().call(health_req).await.unwrap();
     assert_eq!(health.status(), StatusCode::OK);
 
-    let api = svc
-        .ready()
-        .await
-        .unwrap()
-        .call(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/auth/revoke")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    json!({ "refresh_token": "nope" }).to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
+    let mut api_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/auth/revoke")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({ "refresh_token": "nope" }).to_string(),
+        ))
         .unwrap();
+    api_req.extensions_mut().insert(ConnectInfo(peer));
+    let api = svc.ready().await.unwrap().call(api_req).await.unwrap();
     assert_eq!(api.status(), StatusCode::BAD_REQUEST);
     assert!(api.headers().get("x-correlation-id").is_some());
 
@@ -565,40 +607,29 @@ async fn internal_service_token_blocks_sensitive_routes_when_configured() {
 
     let app = register_routes(pool, grpc_none(), None);
     let mut svc = app.into_service();
+    let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9));
 
-    let blocked = svc
-        .ready()
-        .await
-        .unwrap()
-        .call(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/auth/login")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json!({}).to_string()))
-                .unwrap(),
-        )
-        .await
+    let mut blocked_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/auth/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({}).to_string()))
         .unwrap();
+    blocked_req.extensions_mut().insert(ConnectInfo(peer));
+    let blocked = svc.ready().await.unwrap().call(blocked_req).await.unwrap();
     assert_eq!(blocked.status(), StatusCode::FORBIDDEN);
 
-    let ok = svc
-        .ready()
-        .await
-        .unwrap()
-        .call(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/auth/login")
-                .header(header::CONTENT_TYPE, "application/json")
-                .header("x-internal-service-token", "secret-one")
-                .body(Body::from(
-                    json!({ "email": "x", "password": "y" }).to_string(),
-                ))
-                .unwrap(),
-        )
-        .await
+    let mut ok_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/auth/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("x-internal-service-token", "secret-one")
+        .body(Body::from(
+            json!({ "email": "x", "password": "y" }).to_string(),
+        ))
         .unwrap();
+    ok_req.extensions_mut().insert(ConnectInfo(peer));
+    let ok = svc.ready().await.unwrap().call(ok_req).await.unwrap();
     assert_ne!(ok.status(), StatusCode::FORBIDDEN);
 
     std::env::remove_var("INTERNAL_SERVICE_TOKEN_ALLOWLIST");
@@ -622,9 +653,14 @@ async fn password_reset_completes_with_seeded_token() {
         grpc: grpc_none(),
         email: None,
     };
-    let _ = register_business(State(state.clone()), Json(register_payload(&email)))
-        .await
-        .expect("register");
+    let _ = register_business(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        Json(register_payload(&email)),
+    )
+    .await
+    .expect("register");
 
     let email_norm = email.trim().to_lowercase();
     let user_id: Uuid = sqlx::query_scalar(
@@ -656,6 +692,8 @@ async fn password_reset_completes_with_seeded_token() {
 
     let done = reset_password(
         State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
         Json(ResetPasswordRequest {
             token: raw_token.into(),
             new_password: "newpassword1!".into(),
@@ -667,6 +705,8 @@ async fn password_reset_completes_with_seeded_token() {
 
     let login_ok = login(
         State(state),
+        hdr_empty(),
+        test_connect_info(),
         Json(LoginRequest {
             email,
             password: "newpassword1!".into(),

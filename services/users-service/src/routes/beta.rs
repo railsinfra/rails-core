@@ -1,10 +1,17 @@
 //! Private beta application endpoint
 
+use std::collections::HashMap;
+use std::net::SocketAddr;
+
+use axum::extract::ConnectInfo;
+use axum::http::HeaderMap;
 use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::audit_emit;
 use crate::error::{AppError, DUPLICATE_BETA_EMAIL_MESSAGE};
+use crate::grpc::audit_proto::ActorType;
 use crate::routes::{user, AppState};
 
 #[derive(Deserialize)]
@@ -48,10 +55,10 @@ fn normalize_payload(payload: BetaApplicationRequest) -> Result<BetaApplicationI
     })
 }
 
-pub async fn apply_for_beta(
-    State(state): State<AppState>,
+async fn apply_for_beta_inner(
+    state: AppState,
     Json(payload): Json<BetaApplicationRequest>,
-) -> Result<Json<BetaApplicationResponse>, AppError> {
+) -> Result<(BetaApplicationResponse, Uuid), AppError> {
     let input = normalize_payload(payload)?;
     let email_normalized = user::normalize_email(&input.email);
     if email_normalized.is_empty() {
@@ -104,9 +111,70 @@ pub async fn apply_for_beta(
         tracing::warn!("Email service not configured, beta application not sent");
     }
 
-    Ok(Json(BetaApplicationResponse {
-        message: "Application received. We'll be in touch shortly.".to_string(),
-    }))
+    Ok((
+        BetaApplicationResponse {
+            message: "Application received. We'll be in touch shortly.".to_string(),
+        },
+        application_id,
+    ))
+}
+
+pub async fn apply_for_beta(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Json(payload): Json<BetaApplicationRequest>,
+) -> Result<Json<BetaApplicationResponse>, AppError> {
+    let path = "/api/v1/beta/apply";
+    let mut meta = HashMap::new();
+    match apply_for_beta_inner(state.clone(), Json(payload)).await {
+        Ok((body, app_id)) => {
+            audit_emit::emit_users_mutation(
+                &state.grpc,
+                &headers,
+                &peer,
+                "POST",
+                path,
+                "users.beta.apply",
+                Uuid::nil(),
+                ActorType::Anonymous,
+                "",
+                vec![],
+                "beta_application",
+                app_id,
+                200,
+                None,
+                meta,
+            )
+            .await;
+            Ok(Json(body))
+        }
+        Err(e) => {
+            meta.insert(
+                "http_status".into(),
+                audit_emit::http_status_for_error(&e).to_string(),
+            );
+            audit_emit::emit_users_mutation(
+                &state.grpc,
+                &headers,
+                &peer,
+                "POST",
+                path,
+                "users.beta.apply",
+                Uuid::nil(),
+                ActorType::Anonymous,
+                "",
+                vec![],
+                "beta_application",
+                Uuid::nil(),
+                audit_emit::http_status_for_error(&e),
+                Some(audit_emit::truncate_reason(&e.to_string())),
+                meta,
+            )
+            .await;
+            Err(e)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -115,6 +183,8 @@ mod tests {
     use crate::config::Config;
     use crate::email::EmailService;
     use crate::grpc::GrpcClients;
+    use crate::test_support::test_connect_info;
+    use axum::http::HeaderMap;
     use httpmock::Method::POST;
     use httpmock::MockServer;
     use sqlx::postgres::PgPoolOptions;
@@ -184,6 +254,7 @@ mod tests {
             server_addr: "127.0.0.1:0".to_string(),
             grpc_port: 50051,
             accounts_grpc_url: "http://localhost:50052".to_string(),
+            audit_grpc_url: "http://127.0.0.1:1".to_string(),
             sentry_dsn: None,
             environment: "test".to_string(),
             resend_api_key: Some("test-key".to_string()),
@@ -197,9 +268,7 @@ mod tests {
         let email_service = EmailService::new(&config);
         let state = AppState {
             db: pool.clone(),
-            grpc: GrpcClients {
-                accounts_client: None,
-            },
+            grpc: GrpcClients::none(),
             email: Some(email_service),
         };
 
@@ -211,9 +280,14 @@ mod tests {
             use_case: "Treasury automation".to_string(),
         };
 
-        let response = apply_for_beta(State(state), Json(payload))
-            .await
-            .expect("apply_for_beta should succeed");
+        let response = apply_for_beta(
+            State(state),
+            HeaderMap::new(),
+            test_connect_info(),
+            Json(payload),
+        )
+        .await
+        .expect("apply_for_beta should succeed");
 
         assert_eq!(
             response.0.message,
@@ -255,9 +329,7 @@ mod tests {
 
         let state = AppState {
             db: pool.clone(),
-            grpc: GrpcClients {
-                accounts_client: None,
-            },
+            grpc: GrpcClients::none(),
             email: None,
         };
 
@@ -269,9 +341,14 @@ mod tests {
             use_case: "Treasury automation".to_string(),
         };
 
-        let response = apply_for_beta(State(state), Json(payload))
-            .await
-            .expect("apply_for_beta should succeed without email");
+        let response = apply_for_beta(
+            State(state),
+            HeaderMap::new(),
+            test_connect_info(),
+            Json(payload),
+        )
+        .await
+        .expect("apply_for_beta should succeed without email");
 
         assert_eq!(
             response.0.message,

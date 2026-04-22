@@ -1,5 +1,13 @@
+use std::collections::HashMap;
+use std::net::SocketAddr;
+
+use axum::extract::ConnectInfo;
+use axum::http::HeaderMap;
 use axum::{Json, extract::State, extract::Path};
 use uuid::Uuid;
+
+use crate::audit_emit;
+use crate::grpc::audit_proto::ActorType;
 use crate::{error::AppError};
 use crate::routes::AppState;
 use crate::auth::{AuthContext, hash_api_key};
@@ -35,11 +43,11 @@ pub struct ApiKeyInfo {
     pub created_by_user_id: Option<Uuid>,
 }
 
-pub async fn create_api_key(
-    State(state): State<AppState>,
+async fn create_api_key_inner(
+    state: AppState,
     ctx: AuthContext,
-    Json(payload): Json<CreateApiKeyRequest>
-) -> Result<Json<CreateApiKeyResponse>, AppError> {
+    Json(payload): Json<CreateApiKeyRequest>,
+) -> Result<(CreateApiKeyResponse, Uuid, Uuid), AppError> {
     let request_user_id = ctx.user_id.ok_or(AppError::Forbidden)?;
 
     let role_row = sqlx::query("SELECT role FROM users WHERE id = $1 AND environment_id = $2 AND status = 'active'")
@@ -92,11 +100,74 @@ pub async fn create_api_key(
     .await
     .map_err(|_| AppError::Internal)?;
 
-    Ok(Json(CreateApiKeyResponse {
-        id,
-        key: api_key_plain,
-        status: "active".to_string(),
-    }))
+    Ok((
+        CreateApiKeyResponse {
+            id,
+            key: api_key_plain,
+            status: "active".to_string(),
+        },
+        ctx.business_id,
+        request_user_id,
+    ))
+}
+
+pub async fn create_api_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ctx: AuthContext,
+    Json(payload): Json<CreateApiKeyRequest>,
+) -> Result<Json<CreateApiKeyResponse>, AppError> {
+    let path = "/api/v1/api-keys";
+    let mut meta = HashMap::new();
+    match create_api_key_inner(state.clone(), ctx, Json(payload)).await {
+        Ok((body, bid, uid)) => {
+            audit_emit::emit_users_mutation(
+                &state.grpc,
+                &headers,
+                &peer,
+                "POST",
+                path,
+                "users.api_key.create",
+                bid,
+                ActorType::User,
+                &uid.to_string(),
+                vec!["admin".to_string()],
+                "api_key",
+                body.id,
+                200,
+                None,
+                meta,
+            )
+            .await;
+            Ok(Json(body))
+        }
+        Err(e) => {
+            meta.insert(
+                "http_status".into(),
+                audit_emit::http_status_for_error(&e).to_string(),
+            );
+            audit_emit::emit_users_mutation(
+                &state.grpc,
+                &headers,
+                &peer,
+                "POST",
+                path,
+                "users.api_key.create",
+                Uuid::nil(),
+                ActorType::Anonymous,
+                "",
+                vec![],
+                "api_key",
+                Uuid::nil(),
+                audit_emit::http_status_for_error(&e),
+                Some(audit_emit::truncate_reason(&e.to_string())),
+                meta,
+            )
+            .await;
+            Err(e)
+        }
+    }
 }
 
 pub async fn list_api_keys(
@@ -142,11 +213,11 @@ pub async fn list_api_keys(
     Ok(Json(keys))
 }
 
-pub async fn revoke_api_key(
-    State(state): State<AppState>,
+async fn revoke_api_key_inner(
+    state: AppState,
     ctx: AuthContext,
-    Path(api_key_id): Path<Uuid>
-) -> Result<Json<CreateApiKeyResponse>, AppError> {
+    Path(api_key_id): Path<Uuid>,
+) -> Result<(CreateApiKeyResponse, Uuid, Uuid), AppError> {
     let request_user_id = ctx.user_id.ok_or(AppError::Forbidden)?;
     let role_row = sqlx::query("SELECT role FROM users WHERE id = $1 AND environment_id = $2 AND status = 'active'")
         .bind(&request_user_id)
@@ -176,11 +247,74 @@ pub async fn revoke_api_key(
         return Err(AppError::BadRequest("API key not found or already revoked".to_string()));
     }
 
-    Ok(Json(CreateApiKeyResponse {
-        id: api_key_id,
-        key: "".to_string(),
-        status: "revoked".to_string(),
-    }))
+    Ok((
+        CreateApiKeyResponse {
+            id: api_key_id,
+            key: "".to_string(),
+            status: "revoked".to_string(),
+        },
+        ctx.business_id,
+        request_user_id,
+    ))
+}
+
+pub async fn revoke_api_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ctx: AuthContext,
+    Path(api_key_id): Path<Uuid>,
+) -> Result<Json<CreateApiKeyResponse>, AppError> {
+    let path = format!("/api/v1/api-keys/{api_key_id}/revoke");
+    let mut meta = HashMap::new();
+    match revoke_api_key_inner(state.clone(), ctx, Path(api_key_id)).await {
+        Ok((body, bid, uid)) => {
+            audit_emit::emit_users_mutation(
+                &state.grpc,
+                &headers,
+                &peer,
+                "POST",
+                &path,
+                "users.api_key.revoke",
+                bid,
+                ActorType::User,
+                &uid.to_string(),
+                vec!["admin".to_string()],
+                "api_key",
+                body.id,
+                200,
+                None,
+                meta,
+            )
+            .await;
+            Ok(Json(body))
+        }
+        Err(e) => {
+            meta.insert(
+                "http_status".into(),
+                audit_emit::http_status_for_error(&e).to_string(),
+            );
+            audit_emit::emit_users_mutation(
+                &state.grpc,
+                &headers,
+                &peer,
+                "POST",
+                &path,
+                "users.api_key.revoke",
+                Uuid::nil(),
+                ActorType::Anonymous,
+                "",
+                vec![],
+                "api_key",
+                api_key_id,
+                audit_emit::http_status_for_error(&e),
+                Some(audit_emit::truncate_reason(&e.to_string())),
+                meta,
+            )
+            .await;
+            Err(e)
+        }
+    }
 }
 
 #[cfg(test)]

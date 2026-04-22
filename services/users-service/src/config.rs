@@ -4,6 +4,7 @@ pub struct Config {
     pub server_addr: String,
     pub grpc_port: u16,
     pub accounts_grpc_url: String,
+    pub audit_grpc_url: String,
     pub sentry_dsn: Option<String>,
     pub environment: String,
     pub resend_api_key: Option<String>,
@@ -53,7 +54,10 @@ pub fn load() -> Result<Config, anyhow::Error> {
 
     let accounts_grpc_url = std::env::var("ACCOUNTS_GRPC_URL")
         .unwrap_or_else(|_| "http://localhost:50052".to_string());
-    
+
+    let audit_grpc_url =
+        std::env::var("AUDIT_GRPC_URL").unwrap_or_else(|_| "http://localhost:50054".to_string());
+
     let sentry_dsn = std::env::var("SENTRY_DSN").ok();
     let environment = std::env::var("ENVIRONMENT")
         .unwrap_or_else(|_| "development".to_string());
@@ -75,6 +79,7 @@ pub fn load() -> Result<Config, anyhow::Error> {
         server_addr,
         grpc_port,
         accounts_grpc_url,
+        audit_grpc_url,
         sentry_dsn,
         environment,
         resend_api_key,
@@ -95,6 +100,7 @@ impl Config {
             server_addr: "0.0.0.0:0".into(),
             grpc_port: 50051,
             accounts_grpc_url,
+            audit_grpc_url: "http://127.0.0.1:1".into(),
             sentry_dsn: None,
             environment: "test".into(),
             resend_api_key: None,

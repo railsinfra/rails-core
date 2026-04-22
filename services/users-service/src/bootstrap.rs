@@ -61,6 +61,7 @@ pub async fn run() -> anyhow::Result<()> {
     tracing::info!("  DATABASE_URL: configured (value omitted; see repository .env)");
     tracing::info!("  SERVER_ADDR: {}", config.server_addr);
     tracing::info!("  ACCOUNTS_GRPC_URL: {}", config.accounts_grpc_url);
+    tracing::info!("  AUDIT_GRPC_URL: {}", config.audit_grpc_url);
 
     tracing::info!("Connecting to database...");
     eprintln!("[STARTUP] Connecting to database...");
