@@ -235,7 +235,7 @@
                   "pm.test('response echoes correlation id', function () {",
                   "  pm.expect(pm.response.headers.get('x-correlation-id')).to.eql(cid);",
                   "});",
-                  "console.log('Audit verify (deposit): correlation_id=', cid, 'idempotency_key=', pm.collectionVariables.get('audit_deposit_idempotency_key'));"
+                  "console.log('Audit verify (deposit): correlation_id=', cid);"
                 ],
                 "type": "text/javascript"
               }
@@ -281,7 +281,7 @@
                   "pm.test('response echoes correlation id', function () {",
                   "  pm.expect(pm.response.headers.get('x-correlation-id')).to.eql(cid);",
                   "});",
-                  "console.log('Audit verify (transfer): correlation_id=', cid, 'idempotency_key=', pm.collectionVariables.get('audit_transfer_idempotency_key'));"
+                  "console.log('Audit verify (transfer): correlation_id=', cid);"
                 ],
                 "type": "text/javascript"
               }
