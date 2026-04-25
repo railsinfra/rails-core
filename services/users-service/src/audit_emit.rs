@@ -79,14 +79,17 @@ pub fn truncate_reason(s: &str) -> String {
 
 /// Deadline for each `AppendAuditEvent` RPC. Remote Postgres (e.g. Neon) often needs >400ms.
 fn audit_append_deadline() -> Duration {
+    const AUDIT_APPEND_TIMEOUT_MS_ENV: &str = "AUDIT_APPEND_TIMEOUT_MS";
     const DEFAULT_MS: u64 = 5_000;
     const MAX_MS: u64 = 120_000;
-    std::env::var("AUDIT_APPEND_TIMEOUT_MS")
+    std::env::var(AUDIT_APPEND_TIMEOUT_MS_ENV)
         .ok()
         .and_then(|s| s.trim().parse::<u64>().ok())
         .filter(|&ms| ms > 0 && ms <= MAX_MS)
-        .map(Duration::from_millis)
-        .unwrap_or_else(|| Duration::from_millis(DEFAULT_MS))
+        .map_or_else(
+            || Duration::from_millis(DEFAULT_MS),
+            Duration::from_millis,
+        )
 }
 
 /// Best-effort audit RPC (`AUDIT_APPEND_TIMEOUT_MS`, default 5s). Logs + Sentry on errors; never affects HTTP status.

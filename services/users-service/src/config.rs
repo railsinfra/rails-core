@@ -34,7 +34,23 @@ pub(crate) fn compose_server_addr(
 }
 
 pub fn load() -> Result<Config, anyhow::Error> {
-    let database_url_raw = std::env::var("DATABASE_URL")
+    const DATABASE_URL_ENV: &str = "DATABASE_URL";
+    const HOST_ENV: &str = "HOST";
+    const PORT_ENV: &str = "PORT";
+    const SERVER_ADDR_ENV: &str = "SERVER_ADDR";
+    const GRPC_PORT_ENV: &str = "GRPC_PORT";
+    const ACCOUNTS_GRPC_URL_ENV: &str = "ACCOUNTS_GRPC_URL";
+    const AUDIT_GRPC_URL_ENV: &str = "AUDIT_GRPC_URL";
+    const SENTRY_DSN_ENV: &str = "SENTRY_DSN";
+    const ENVIRONMENT_ENV: &str = "ENVIRONMENT";
+    const RESEND_API_KEY_ENV: &str = "RESEND_API_KEY";
+    const RESEND_FROM_EMAIL_ENV: &str = "RESEND_FROM_EMAIL";
+    const RESEND_FROM_NAME_ENV: &str = "RESEND_FROM_NAME";
+    const RESEND_BASE_URL_ENV: &str = "RESEND_BASE_URL";
+    const RESEND_BETA_NOTIFICATION_EMAIL_ENV: &str = "RESEND_BETA_NOTIFICATION_EMAIL";
+    const FRONTEND_BASE_URL_ENV: &str = "FRONTEND_BASE_URL";
+
+    let database_url_raw = std::env::var(DATABASE_URL_ENV)
         .map_err(|_| anyhow::anyhow!(
             "DATABASE_URL environment variable is required. \
             Set it to your PostgreSQL connection string (e.g., Supabase, Neon, or local PostgreSQL). \
@@ -42,36 +58,37 @@ pub fn load() -> Result<Config, anyhow::Error> {
         ))?;
     let database_url = strip_jdbc_database_url_prefix(&database_url_raw).to_string();
 
-    let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
-    let port = std::env::var("PORT").ok().and_then(|p| p.parse::<u16>().ok());
-    let server_addr_env = std::env::var("SERVER_ADDR").ok();
+    let host = std::env::var(HOST_ENV).unwrap_or_else(|_| "0.0.0.0".to_string());
+    let port = std::env::var(PORT_ENV)
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok());
+    let server_addr_env = std::env::var(SERVER_ADDR_ENV).ok();
     let server_addr = compose_server_addr(&host, port, server_addr_env.as_deref());
 
-    let grpc_port = std::env::var("GRPC_PORT")
+    let grpc_port = std::env::var(GRPC_PORT_ENV)
         .ok()
         .and_then(|p| p.parse::<u16>().ok())
         .unwrap_or(50051);
 
-    let accounts_grpc_url = std::env::var("ACCOUNTS_GRPC_URL")
+    let accounts_grpc_url = std::env::var(ACCOUNTS_GRPC_URL_ENV)
         .unwrap_or_else(|_| "http://localhost:50052".to_string());
 
-    let audit_grpc_url =
-        std::env::var("AUDIT_GRPC_URL").unwrap_or_else(|_| "http://localhost:50054".to_string());
+    let audit_grpc_url = std::env::var(AUDIT_GRPC_URL_ENV)
+        .unwrap_or_else(|_| "http://localhost:50054".to_string());
 
-    let sentry_dsn = std::env::var("SENTRY_DSN").ok();
-    let environment = std::env::var("ENVIRONMENT")
-        .unwrap_or_else(|_| "development".to_string());
+    let sentry_dsn = std::env::var(SENTRY_DSN_ENV).ok();
+    let environment = std::env::var(ENVIRONMENT_ENV).unwrap_or_else(|_| "development".to_string());
     
-    let resend_api_key = std::env::var("RESEND_API_KEY").ok();
-    let resend_from_email = std::env::var("RESEND_FROM_EMAIL")
+    let resend_api_key = std::env::var(RESEND_API_KEY_ENV).ok();
+    let resend_from_email = std::env::var(RESEND_FROM_EMAIL_ENV)
         .unwrap_or_else(|_| "noreply@rails.co.za".to_string());
-    let resend_from_name = std::env::var("RESEND_FROM_NAME")
+    let resend_from_name = std::env::var(RESEND_FROM_NAME_ENV)
         .unwrap_or_else(|_| "Rails Financial Infrastructure".to_string());
-    let resend_base_url = std::env::var("RESEND_BASE_URL")
+    let resend_base_url = std::env::var(RESEND_BASE_URL_ENV)
         .unwrap_or_else(|_| "https://api.resend.com".to_string());
-    let resend_beta_notification_email = std::env::var("RESEND_BETA_NOTIFICATION_EMAIL")
+    let resend_beta_notification_email = std::env::var(RESEND_BETA_NOTIFICATION_EMAIL_ENV)
         .unwrap_or_else(|_| resend_from_email.clone());
-    let frontend_base_url = std::env::var("FRONTEND_BASE_URL")
+    let frontend_base_url = std::env::var(FRONTEND_BASE_URL_ENV)
         .unwrap_or_else(|_| "http://localhost:5173".to_string());
     
     Ok(Config {

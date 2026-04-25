@@ -150,7 +150,8 @@ mod tests {
 
     #[tokio::test]
     async fn append_round_trip_against_postgres() {
-        let url = match std::env::var("AUDIT_DATABASE_URL") {
+        const AUDIT_DATABASE_URL_ENV: &str = "AUDIT_DATABASE_URL";
+        let url = match std::env::var(AUDIT_DATABASE_URL_ENV) {
             Ok(u) if !u.is_empty() => u,
             _ => {
                 eprintln!("skip append_round_trip_against_postgres: AUDIT_DATABASE_URL unset");
@@ -213,7 +214,7 @@ mod tests {
             }),
             correlation_id: "corr-itest".into(),
             reason: None,
-            metadata: Default::default(),
+            metadata: std::collections::HashMap::default(),
         };
 
         let mut req = Request::new(AppendAuditEventRequest { event: Some(ev) });

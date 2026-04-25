@@ -92,7 +92,7 @@ async fn append_audit_event_persists_row() {
         }),
         correlation_id: correlation_id.clone(),
         reason: None,
-        metadata: Default::default(),
+        metadata: std::collections::HashMap::default(),
     };
 
     let mut req = Request::new(AppendAuditEventRequest { event: Some(ev) });

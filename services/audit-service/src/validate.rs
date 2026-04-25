@@ -56,10 +56,28 @@ fn static_metadata_keys() -> HashSet<&'static str> {
 }
 
 pub fn validate_audit_event(event: &AuditEvent) -> Result<(), Status> {
+    validate_schema(event)?;
+    validate_occurred_at(event)?;
+    validate_source_service(event)?;
+    validate_org_and_action(event)?;
+    validate_environment_and_correlation(event)?;
+    validate_outcome(event)?;
+    validate_actor(event)?;
+    validate_target(event)?;
+    validate_request(event)?;
+    validate_reason(event)?;
+    validate_metadata(event)?;
+    Ok(())
+}
+
+fn validate_schema(event: &AuditEvent) -> Result<(), Status> {
     if event.schema_version != 1 {
         return Err(Status::invalid_argument("schema_version must be 1"));
     }
+    Ok(())
+}
 
+fn validate_occurred_at(event: &AuditEvent) -> Result<(), Status> {
     let occurred_at: DateTime<Utc> = DateTime::parse_from_rfc3339(&event.occurred_at)
         .map_err(|_| Status::invalid_argument("occurred_at must be RFC3339 UTC"))?
         .with_timezone(&Utc);
@@ -67,16 +85,23 @@ pub fn validate_audit_event(event: &AuditEvent) -> Result<(), Status> {
     if occurred_at > Utc::now() + chrono::Duration::minutes(5) {
         return Err(Status::invalid_argument("occurred_at cannot be far in the future"));
     }
+    Ok(())
+}
 
+fn validate_source_service(event: &AuditEvent) -> Result<(), Status> {
     let source = event.source_service.trim();
     if !matches!(source, "users" | "accounts" | "ledger") {
         return Err(Status::invalid_argument(
             "source_service must be one of: users, accounts, ledger",
         ));
     }
+    Ok(())
+}
 
+fn validate_org_and_action(event: &AuditEvent) -> Result<(), Status> {
     let org_trim = event.organization_id.trim();
-    let org = Uuid::parse_str(org_trim).map_err(|_| Status::invalid_argument("organization_id must be a UUID"))?;
+    let org = Uuid::parse_str(org_trim)
+        .map_err(|_| Status::invalid_argument("organization_id must be a UUID"))?;
 
     let actions = static_action_set();
     let action = event.action.trim();
@@ -91,7 +116,10 @@ pub fn validate_audit_event(event: &AuditEvent) -> Result<(), Status> {
             ));
         }
     }
+    Ok(())
+}
 
+fn validate_environment_and_correlation(event: &AuditEvent) -> Result<(), Status> {
     if event.environment.trim().is_empty() {
         return Err(Status::invalid_argument("environment is required"));
     }
@@ -99,29 +127,40 @@ pub fn validate_audit_event(event: &AuditEvent) -> Result<(), Status> {
     if event.correlation_id.trim().is_empty() {
         return Err(Status::invalid_argument("correlation_id is required"));
     }
+    Ok(())
+}
 
+fn validate_outcome(event: &AuditEvent) -> Result<(), Status> {
     let outcome = Outcome::try_from(event.outcome)
         .map_err(|_| Status::invalid_argument("invalid outcome enum value"))?;
     if outcome == Outcome::Unspecified {
         return Err(Status::invalid_argument("outcome must be set"));
     }
+    Ok(())
+}
 
+fn validate_actor(event: &AuditEvent) -> Result<(), Status> {
     let actor = event.actor.as_ref().ok_or_else(|| Status::invalid_argument("actor is required"))?;
     let actor_type = ActorType::try_from(actor.r#type)
         .map_err(|_| Status::invalid_argument("invalid actor type"))?;
     if actor_type == ActorType::Unspecified {
         return Err(Status::invalid_argument("actor.type must be set"));
     }
+    Ok(())
+}
 
-    event
+fn validate_target(event: &AuditEvent) -> Result<(), Status> {
+    let target = event
         .target
         .as_ref()
         .ok_or_else(|| Status::invalid_argument("target is required"))?;
-    let target = event.target.as_ref().unwrap();
     if target.r#type.trim().is_empty() || target.id.trim().is_empty() {
         return Err(Status::invalid_argument("target.type and target.id are required"));
     }
+    Ok(())
+}
 
+fn validate_request(event: &AuditEvent) -> Result<(), Status> {
     let req = event
         .request
         .as_ref()
@@ -129,14 +168,20 @@ pub fn validate_audit_event(event: &AuditEvent) -> Result<(), Status> {
     if req.method.trim().is_empty() || req.path.trim().is_empty() {
         return Err(Status::invalid_argument("request.method and request.path are required"));
     }
+    Ok(())
+}
 
+fn validate_reason(event: &AuditEvent) -> Result<(), Status> {
     if let Some(reason) = event.reason.as_ref() {
         let r = reason.trim();
         if r.chars().count() > 500 {
             return Err(Status::invalid_argument("reason exceeds 500 characters"));
         }
     }
+    Ok(())
+}
 
+fn validate_metadata(event: &AuditEvent) -> Result<(), Status> {
     let allowed_meta = static_metadata_keys();
     if event.metadata.len() > 16 {
         return Err(Status::invalid_argument("metadata may have at most 16 entries"));
@@ -149,7 +194,6 @@ pub fn validate_audit_event(event: &AuditEvent) -> Result<(), Status> {
             return Err(Status::invalid_argument("metadata value exceeds 256 characters"));
         }
     }
-
     Ok(())
 }
 
@@ -167,7 +211,7 @@ mod tests {
             environment: "unknown".into(),
             actor: Some(Actor {
                 r#type: ActorType::Anonymous as i32,
-                id: String::new(),
+                id: String::default(),
                 roles: vec![],
             }),
             action: "users.auth.login".into(),
@@ -185,7 +229,7 @@ mod tests {
             }),
             correlation_id: "cid".into(),
             reason: None,
-            metadata: Default::default(),
+            metadata: std::collections::HashMap::default(),
         }
     }
 

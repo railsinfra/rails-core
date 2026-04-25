@@ -171,7 +171,7 @@ pub async fn request_password_reset(
         Ok((body, outcome)) => {
             let (org, actor, actor_id, tgt) = match &outcome {
                 PasswordResetRequestOutcome::NoSuchUser => {
-                    (Uuid::nil(), ActorType::Anonymous, String::new(), Uuid::nil())
+                    (Uuid::nil(), ActorType::Anonymous, String::default(), Uuid::nil())
                 }
                 PasswordResetRequestOutcome::Issued {
                     user_id,
