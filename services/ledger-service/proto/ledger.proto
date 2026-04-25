@@ -9,6 +9,7 @@ option java_outer_classname = "LedgerProto";
 service LedgerService {
   rpc PostTransaction(PostTransactionRequest) returns (PostTransactionResponse);
   rpc GetAccountBalance(GetAccountBalanceRequest) returns (GetAccountBalanceResponse);
+  rpc GetAccountBalances(GetAccountBalancesRequest) returns (GetAccountBalancesResponse);
 }
 
 enum Environment {
@@ -45,4 +46,18 @@ message GetAccountBalanceRequest {
 message GetAccountBalanceResponse {
   string balance = 1;
   string currency = 2;
+}
+
+message GetAccountBalancesRequest {
+  string organization_id = 1;
+  Environment environment = 2;
+  string from_external_account_id = 3;
+  string to_external_account_id = 4;
+  string currency = 5;
+}
+
+message GetAccountBalancesResponse {
+  string from_balance = 1;
+  string to_balance = 2;
+  string currency = 3;
 }

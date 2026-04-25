@@ -1,4 +1,5 @@
 use tracing::info;
+use std::time::Instant;
 use crate::errors::AppError;
 use crate::ledger_grpc::LedgerGrpc;
 use crate::models::{Account, AccountStatus, CreateAccountRequest, Transaction, TransactionKind, TransactionStatus, PaginatedAccountsResponse};
@@ -303,6 +304,7 @@ impl AccountService {
             ImmediateLedgerOutcome::ReturnWithoutPost(tx) => tx,
             ImmediateLedgerOutcome::Post(tx) => {
                 let correlation_id = correlation_id.unwrap_or_else(|| tx.id.to_string());
+                let started_at = Instant::now();
                 let post_result = ledger_grpc
                     .post_transaction(
                         organization_id,
@@ -316,6 +318,13 @@ impl AccountService {
                         correlation_id,
                     )
                     .await;
+                tracing::info!(
+                    transaction_id = %tx.id,
+                    transaction_kind = "deposit",
+                    elapsed_ms = started_at.elapsed().as_millis(),
+                    success = post_result.is_ok(),
+                    "ledger_post_transaction_timing"
+                );
 
                 match post_result {
                     Ok(()) => {
@@ -443,6 +452,7 @@ impl AccountService {
             ImmediateLedgerOutcome::ReturnWithoutPost(tx) => tx,
             ImmediateLedgerOutcome::Post(tx) => {
                 let correlation_id = correlation_id.unwrap_or_else(|| tx.id.to_string());
+                let started_at = Instant::now();
                 let post_result = ledger_grpc
                     .post_transaction(
                         organization_id,
@@ -456,6 +466,13 @@ impl AccountService {
                         correlation_id,
                     )
                     .await;
+                tracing::info!(
+                    transaction_id = %tx.id,
+                    transaction_kind = "withdraw",
+                    elapsed_ms = started_at.elapsed().as_millis(),
+                    success = post_result.is_ok(),
+                    "ledger_post_transaction_timing"
+                );
 
                 match post_result {
                     Ok(()) => {
@@ -608,6 +625,7 @@ impl AccountService {
             ImmediateLedgerOutcome::ReturnWithoutPost(tx) => tx,
             ImmediateLedgerOutcome::Post(tx) => {
                 let correlation_id = correlation_id.unwrap_or_else(|| tx.id.to_string());
+                let started_at = Instant::now();
                 let post_result = ledger_grpc
                     .post_transaction(
                         from_org,
@@ -621,6 +639,13 @@ impl AccountService {
                         correlation_id,
                     )
                     .await;
+                tracing::info!(
+                    transaction_id = %tx.id,
+                    transaction_kind = "transfer",
+                    elapsed_ms = started_at.elapsed().as_millis(),
+                    success = post_result.is_ok(),
+                    "ledger_post_transaction_timing"
+                );
 
                 match post_result {
                     Ok(()) => {

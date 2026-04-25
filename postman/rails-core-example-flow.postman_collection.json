@@ -11,12 +11,30 @@
     { "key": "environment_id", "value": "" },
     { "key": "api_key", "value": "" },
     { "key": "from_account_id", "value": "" },
-    { "key": "to_account_id", "value": "" }
+    { "key": "to_account_id", "value": "" },
+    { "key": "audit_correlation_id", "value": "" },
+    { "key": "audit_deposit_idempotency_key", "value": "audit-deposit-1" },
+    { "key": "audit_transfer_idempotency_key", "value": "audit-transfer-1" },
+    { "key": "audit_transaction_id", "value": "" }
   ],
   "item": [
     {
       "name": "1. Register business",
       "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "exec": [
+              "const suffix = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;",
+              "pm.collectionVariables.set('demo_business_name', `Demo Co ${suffix}`);",
+              "pm.collectionVariables.set('demo_business_website', `https://demo-${suffix}.example.com`);",
+              "pm.collectionVariables.set('demo_admin_first_name', 'Ada');",
+              "pm.collectionVariables.set('demo_admin_last_name', `User${Math.floor(Math.random() * 10000)}`);",
+              "pm.collectionVariables.set('demo_admin_email', `ada+${suffix}@example.com`);"
+            ],
+            "type": "text/javascript"
+          }
+        },
         {
           "listen": "test",
           "script": {
@@ -37,11 +55,11 @@
         "header": [{ "key": "Content-Type", "value": "application/json" }],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"name\": \"Demo Co\",\n  \"website\": \"https://example.com\",\n  \"admin_first_name\": \"Ada\",\n  \"admin_last_name\": \"Lovelace\",\n  \"admin_email\": \"ada+demo@example.com\",\n  \"admin_password\": \"SecurePass123!\"\n}",
+          "raw": "{\n  \"name\": \"{{demo_business_name}}\",\n  \"website\": \"{{demo_business_website}}\",\n  \"admin_first_name\": \"{{demo_admin_first_name}}\",\n  \"admin_last_name\": \"{{demo_admin_last_name}}\",\n  \"admin_email\": \"{{demo_admin_email}}\",\n  \"admin_password\": \"SecurePass123!\"\n}",
           "options": { "raw": { "language": "json" } }
         },
         "url": "{{base_url}}/users/api/v1/business/register",
-        "description": "Change `admin_email` if this address is already registered."
+        "description": "Generates unique business/admin data on every run to avoid duplicate-email conflicts."
       },
       "response": []
     },
@@ -105,7 +123,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"account_type\": \"checking\",\n  \"email\": \"holder-a@example.com\",\n  \"first_name\": \"A\",\n  \"last_name\": \"One\"\n}",
+          "raw": "{\n  \"account_type\": \"checking\",\n  \"email\": \"holder-a+{{$timestamp}}{{$randomInt}}@example.com\",\n  \"first_name\": \"A\",\n  \"last_name\": \"One\"\n}",
           "options": { "raw": { "language": "json" } }
         },
         "url": "{{base_url}}/accounts/api/v1/accounts"
@@ -138,7 +156,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"account_type\": \"checking\",\n  \"email\": \"holder-b@example.com\",\n  \"first_name\": \"B\",\n  \"last_name\": \"Two\"\n}",
+          "raw": "{\n  \"account_type\": \"checking\",\n  \"email\": \"holder-b+{{$timestamp}}{{$randomInt}}@example.com\",\n  \"first_name\": \"B\",\n  \"last_name\": \"Two\"\n}",
           "options": { "raw": { "language": "json" } }
         },
         "url": "{{base_url}}/accounts/api/v1/accounts"
@@ -181,6 +199,140 @@
         "url": "{{base_url}}/accounts/api/v1/accounts/{{from_account_id}}/transfer"
       },
       "response": []
+    },
+    {
+      "name": "Audit",
+      "item": [
+        {
+          "name": "A1. Audit service health",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{base_url}}/audit/health",
+            "description": "Confirms audit-service is reachable through gateway before mutation checks."
+          },
+          "response": []
+        },
+        {
+          "name": "A2. Deposit with explicit correlation id",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "const cid = `audit-deposit-${Date.now()}`;",
+                  "pm.collectionVariables.set('audit_correlation_id', cid);"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "const cid = pm.collectionVariables.get('audit_correlation_id');",
+                  "pm.test('response echoes correlation id', function () {",
+                  "  pm.expect(pm.response.headers.get('x-correlation-id')).to.eql(cid);",
+                  "});",
+                  "console.log('Audit verify (deposit): correlation_id=', cid, 'idempotency_key=', pm.collectionVariables.get('audit_deposit_idempotency_key'));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Environment", "value": "sandbox" },
+              { "key": "Idempotency-Key", "value": "{{audit_deposit_idempotency_key}}" },
+              { "key": "X-Correlation-Id", "value": "{{audit_correlation_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 1000\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/accounts/api/v1/accounts/{{from_account_id}}/deposit",
+            "description": "Use the saved `audit_correlation_id` to confirm: accounts start/finish logs + audit append success in audit-service logs."
+          },
+          "response": []
+        },
+        {
+          "name": "A3. Transfer with explicit correlation id",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "const cid = `audit-transfer-${Date.now()}`;",
+                  "pm.collectionVariables.set('audit_correlation_id', cid);"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "const cid = pm.collectionVariables.get('audit_correlation_id');",
+                  "pm.test('response echoes correlation id', function () {",
+                  "  pm.expect(pm.response.headers.get('x-correlation-id')).to.eql(cid);",
+                  "});",
+                  "console.log('Audit verify (transfer): correlation_id=', cid, 'idempotency_key=', pm.collectionVariables.get('audit_transfer_idempotency_key'));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Environment", "value": "sandbox" },
+              { "key": "Idempotency-Key", "value": "{{audit_transfer_idempotency_key}}" },
+              { "key": "X-Correlation-Id", "value": "{{audit_correlation_id}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to_account_id\": \"{{to_account_id}}\",\n  \"amount\": 500\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": "{{base_url}}/accounts/api/v1/accounts/{{from_account_id}}/transfer",
+            "description": "Use the saved `audit_correlation_id` to confirm: accounts start/finish logs + audit append success in audit-service logs."
+          },
+          "response": []
+        },
+        {
+          "name": "A4. Validate existing transaction (read-only)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "const cid = pm.collectionVariables.get('audit_correlation_id');",
+                  "const tx = pm.collectionVariables.get('audit_transaction_id');",
+                  "console.log('Audit verify (existing tx): correlation_id=', cid, 'transaction_id=', tx, 'endpoint=/accounts/api/v1/transactions/' + tx);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Environment", "value": "sandbox" },
+              { "key": "X-Correlation-Id", "value": "{{audit_correlation_id}}" }
+            ],
+            "url": "{{base_url}}/accounts/api/v1/transactions/{{audit_transaction_id}}",
+            "description": "Read-only lookup for an existing transaction. Set `audit_transaction_id` and matching `audit_correlation_id` from your real logs, then grep logs across services using those values to confirm audit emission and downstream persistence."
+          },
+          "response": []
+        }
+      ]
     }
   ]
 }

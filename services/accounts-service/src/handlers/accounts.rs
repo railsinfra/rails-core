@@ -6,9 +6,13 @@ use axum::{
 use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::time::Instant;
+use tonic::transport::Channel;
+use tracing::Level;
 use uuid::Uuid;
 
 use crate::errors::AppError;
+use crate::grpc::audit_proto::audit_service_client::AuditServiceClient;
 use crate::grpc::audit_proto::ActorType;
 use crate::models::{
     Account, AccountResponse, AccountTransactionResponse, CreateAccountRequest,
@@ -59,6 +63,81 @@ pub(crate) fn extract_api_key(headers: &HeaderMap) -> Option<String> {
         .and_then(|v| v.to_str().ok())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+fn log_money_request_boundary(
+    phase: &str,
+    operation: &str,
+    path: &str,
+    correlation_id: Option<&str>,
+    idempotency_key: &str,
+    status: Option<u16>,
+    elapsed_ms: Option<u64>,
+) {
+    let banner = format!(
+        "-----------------------[{phase} - {}]----------------------------",
+        operation.to_uppercase()
+    );
+    tracing::info!(
+        target = "accounts.request_boundary",
+        marker = %banner,
+        operation,
+        path,
+        correlation_id = correlation_id.unwrap_or("missing"),
+        idempotency_key,
+        status = status.unwrap_or(0),
+        elapsed_ms = elapsed_ms.unwrap_or(0),
+        "{banner}"
+    );
+}
+
+fn spawn_audit_emit(
+    audit_client: Option<AuditServiceClient<Channel>>,
+    headers: HeaderMap,
+    peer: SocketAddr,
+    method: &'static str,
+    path: String,
+    action: &'static str,
+    organization_id: Uuid,
+    actor_type: ActorType,
+    actor_id: String,
+    actor_roles: Vec<String>,
+    target_type: &'static str,
+    target_id: Uuid,
+    http_status: u16,
+    reason: Option<String>,
+    metadata: HashMap<String, String>,
+) {
+    tokio::spawn(async move {
+        let started_at = Instant::now();
+        crate::audit_emit::emit_accounts_mutation(
+            &audit_client,
+            &headers,
+            &peer,
+            method,
+            &path,
+            action,
+            organization_id,
+            actor_type,
+            &actor_id,
+            actor_roles,
+            target_type,
+            target_id,
+            http_status,
+            reason,
+            metadata,
+        )
+        .await;
+        let elapsed_ms = started_at.elapsed().as_millis() as u64;
+        tracing::event!(
+            Level::INFO,
+            target = "accounts.latency",
+            action = action,
+            path = path.as_str(),
+            elapsed_ms,
+            "audit_emit_timing_background"
+        );
+    });
 }
 
 pub async fn create_account(
@@ -123,24 +202,23 @@ pub async fn create_account(
                 } else {
                     (ActorType::Anonymous, String::new())
                 };
-                crate::audit_emit::emit_accounts_mutation(
-                    &state.audit_client,
-                    &headers,
-                    &peer,
+                spawn_audit_emit(
+                    state.audit_client.clone(),
+                    headers.clone(),
+                    peer,
                     "POST",
-                    path,
+                    path.to_string(),
                     "accounts.account.create",
                     org,
                     actor_type,
-                    &actor_id,
+                    actor_id,
                     vec![],
                     "account",
                     account.id,
                     201,
                     None,
                     meta,
-                )
-                .await;
+                );
             }
         }
         Err(e) => {
@@ -154,24 +232,23 @@ pub async fn create_account(
                 org_hint_non_holder
             };
             if let Some(org) = org_opt {
-                crate::audit_emit::emit_accounts_mutation(
-                    &state.audit_client,
-                    &headers,
-                    &peer,
+                spawn_audit_emit(
+                    state.audit_client.clone(),
+                    headers.clone(),
+                    peer,
                     "POST",
-                    path,
+                    path.to_string(),
                     "accounts.account.create",
                     org,
                     ActorType::Anonymous,
-                    "",
+                    String::new(),
                     vec![],
                     "account",
                     Uuid::nil(),
                     crate::audit_emit::http_status_for_error(e),
                     Some(crate::audit_emit::truncate_reason(&e.to_string())),
                     meta,
-                )
-                .await;
+                );
             }
         }
     }
@@ -280,24 +357,23 @@ pub async fn update_account_status(
             .as_ref()
             .err()
             .map(|e| crate::audit_emit::truncate_reason(&e.to_string()));
-        crate::audit_emit::emit_accounts_mutation(
-            &state.audit_client,
-            &headers,
-            &peer,
+        spawn_audit_emit(
+            state.audit_client.clone(),
+            headers.clone(),
+            peer,
             "PATCH",
-            &path,
+            path.clone(),
             "accounts.account.update_status",
             org,
             ActorType::Anonymous,
-            "",
+            String::new(),
             vec![],
             "account",
             id,
             http_st,
             reason,
             meta,
-        )
-        .await;
+        );
     }
 
     let account = result?;
@@ -338,24 +414,23 @@ pub async fn close_account(
             .as_ref()
             .err()
             .map(|e| crate::audit_emit::truncate_reason(&e.to_string()));
-        crate::audit_emit::emit_accounts_mutation(
-            &state.audit_client,
-            &headers,
-            &peer,
+        spawn_audit_emit(
+            state.audit_client.clone(),
+            headers.clone(),
+            peer,
             "DELETE",
-            &path,
+            path.clone(),
             "accounts.account.close",
             org,
             ActorType::Anonymous,
-            "",
+            String::new(),
             vec![],
             "account",
             id,
             http_st,
             reason,
             meta,
-        )
-        .await;
+        );
     }
 
     let account = result?;
@@ -388,6 +463,16 @@ pub async fn deposit(
         .and_then(|v: &axum::http::HeaderValue| v.to_str().ok())
         .map(|s: &str| s.trim().to_string())
         .filter(|s: &String| !s.is_empty());
+    let started_at = Instant::now();
+    log_money_request_boundary(
+        "START",
+        "deposit",
+        &path,
+        correlation_id.as_deref(),
+        &idempotency_key,
+        None,
+        None,
+    );
 
     let deposit_result = AccountService::deposit_with_idempotency(
         &state.pool,
@@ -396,12 +481,25 @@ pub async fn deposit(
         request.amount,
         &idempotency_key,
         &state.ledger_grpc,
-        correlation_id,
+        correlation_id.clone(),
         request.description.as_deref(),
         request.external_recipient_id.as_deref(),
         request.reference_id,
     )
     .await;
+    let deposit_status = match &deposit_result {
+        Ok(_) => 200u16,
+        Err(e) => crate::audit_emit::http_status_for_error(e),
+    };
+    log_money_request_boundary(
+        "END",
+        "deposit",
+        &path,
+        correlation_id.as_deref(),
+        &idempotency_key,
+        Some(deposit_status),
+        Some(started_at.elapsed().as_millis() as u64),
+    );
 
     let org = match &deposit_result {
         Ok((account, _)) => account.organization_id,
@@ -427,24 +525,23 @@ pub async fn deposit(
             .as_ref()
             .err()
             .map(|e| crate::audit_emit::truncate_reason(&e.to_string()));
-        crate::audit_emit::emit_accounts_mutation(
-            &state.audit_client,
-            &headers,
-            &peer,
+        spawn_audit_emit(
+            state.audit_client.clone(),
+            headers.clone(),
+            peer,
             "POST",
-            &path,
+            path.clone(),
             "accounts.money.deposit",
             org,
             ActorType::Anonymous,
-            "",
+            String::new(),
             vec![],
             "account",
             id,
             http_st,
             reason,
             meta,
-        )
-        .await;
+        );
     }
 
     let (account, transaction) = deposit_result?;
@@ -452,6 +549,7 @@ pub async fn deposit(
     let mut account_resp = AccountResponse::from(account.clone());
     if let Some(org_id) = account.organization_id {
         let currency = account.currency.as_deref().unwrap_or("USD");
+        let started_at = Instant::now();
         let display_balance = state
             .ledger_grpc
             .get_account_balance(org_id, &environment, id, currency)
@@ -461,6 +559,15 @@ pub async fn deposit(
                 tracing::warn!(account_id = %id, error = %e, "Ledger balance fetch failed, using 0");
                 0
             });
+        let elapsed_ms = started_at.elapsed().as_millis() as u64;
+        tracing::event!(
+            Level::INFO,
+            target = "accounts.latency",
+            account_id = %id,
+            operation = "deposit",
+            elapsed_ms,
+            "get_account_balance_timing"
+        );
         account_resp = account_resp.with_balance(display_balance);
     }
 
@@ -508,7 +615,7 @@ pub async fn withdraw(
         request.amount,
         &idempotency_key,
         &state.ledger_grpc,
-        correlation_id,
+        correlation_id.clone(),
         request.description.as_deref(),
         request.external_recipient_id.as_deref(),
         request.reference_id,
@@ -539,24 +646,23 @@ pub async fn withdraw(
             .as_ref()
             .err()
             .map(|e| crate::audit_emit::truncate_reason(&e.to_string()));
-        crate::audit_emit::emit_accounts_mutation(
-            &state.audit_client,
-            &headers,
-            &peer,
+        spawn_audit_emit(
+            state.audit_client.clone(),
+            headers.clone(),
+            peer,
             "POST",
-            &path,
+            path.clone(),
             "accounts.money.withdraw",
             org,
             ActorType::Anonymous,
-            "",
+            String::new(),
             vec![],
             "account",
             id,
             http_st,
             reason,
             meta,
-        )
-        .await;
+        );
     }
 
     let (account, transaction) = withdraw_result?;
@@ -564,6 +670,7 @@ pub async fn withdraw(
     let mut account_resp = AccountResponse::from(account.clone());
     if let Some(org_id) = account.organization_id {
         let currency = account.currency.as_deref().unwrap_or("USD");
+        let started_at = Instant::now();
         let display_balance = state
             .ledger_grpc
             .get_account_balance(org_id, &environment, id, currency)
@@ -573,6 +680,15 @@ pub async fn withdraw(
                 tracing::warn!(account_id = %id, error = %e, "Ledger balance fetch failed, using 0");
                 0
             });
+        let elapsed_ms = started_at.elapsed().as_millis() as u64;
+        tracing::event!(
+            Level::INFO,
+            target = "accounts.latency",
+            account_id = %id,
+            operation = "withdraw",
+            elapsed_ms,
+            "get_account_balance_timing"
+        );
         account_resp = account_resp.with_balance(display_balance);
     }
 
@@ -612,6 +728,16 @@ pub async fn transfer(
         .and_then(|v: &axum::http::HeaderValue| v.to_str().ok())
         .map(|s: &str| s.trim().to_string())
         .filter(|s: &String| !s.is_empty());
+    let started_at = Instant::now();
+    log_money_request_boundary(
+        "START",
+        "transfer",
+        &path,
+        correlation_id.as_deref(),
+        &idempotency_key,
+        None,
+        None,
+    );
 
     let transfer_result = AccountService::transfer_with_idempotency(
         &state.pool,
@@ -621,12 +747,25 @@ pub async fn transfer(
         request.amount,
         &idempotency_key,
         &state.ledger_grpc,
-        correlation_id,
+        correlation_id.clone(),
         request.description.as_deref(),
         request.external_recipient_id.as_deref(),
         request.reference_id,
     )
     .await;
+    let transfer_status = match &transfer_result {
+        Ok(_) => 200u16,
+        Err(e) => crate::audit_emit::http_status_for_error(e),
+    };
+    log_money_request_boundary(
+        "END",
+        "transfer",
+        &path,
+        correlation_id.as_deref(),
+        &idempotency_key,
+        Some(transfer_status),
+        Some(started_at.elapsed().as_millis() as u64),
+    );
 
     let org = match &transfer_result {
         Ok((from_account, _, _)) => from_account.organization_id,
@@ -652,55 +791,126 @@ pub async fn transfer(
             .as_ref()
             .err()
             .map(|e| crate::audit_emit::truncate_reason(&e.to_string()));
-        crate::audit_emit::emit_accounts_mutation(
-            &state.audit_client,
-            &headers,
-            &peer,
+        spawn_audit_emit(
+            state.audit_client.clone(),
+            headers.clone(),
+            peer,
             "POST",
-            &path,
+            path.clone(),
             "accounts.money.transfer",
             org,
             ActorType::Anonymous,
-            "",
+            String::new(),
             vec![],
             "account",
             from_id,
             http_st,
             reason,
             meta,
-        )
-        .await;
+        );
     }
 
     let (from_account, to_account, transaction) = transfer_result?;
 
     let mut from_resp = AccountResponse::from(from_account.clone());
     let mut to_resp = AccountResponse::from(to_account.clone());
-    if let Some(org_id) = from_account.organization_id {
-        let currency = from_account.currency.as_deref().unwrap_or("USD");
-        let display_balance = state
-            .ledger_grpc
-            .get_account_balance(org_id, &environment, from_account.id, currency)
-            .await
-            .map(|b| negate_ledger_balance_for_display(&b))
-            .unwrap_or_else(|e| {
-                tracing::warn!(account_id = %from_account.id, error = %e, "Ledger balance fetch failed, using 0");
-                0
-            });
-        from_resp = from_resp.with_balance(display_balance);
-    }
-    if let Some(org_id) = to_account.organization_id {
-        let currency = to_account.currency.as_deref().unwrap_or("USD");
-        let display_balance = state
-            .ledger_grpc
-            .get_account_balance(org_id, &environment, to_account.id, currency)
-            .await
-            .map(|b| negate_ledger_balance_for_display(&b))
-            .unwrap_or_else(|e| {
-                tracing::warn!(account_id = %to_account.id, error = %e, "Ledger balance fetch failed, using 0");
-                0
-            });
-        to_resp = to_resp.with_balance(display_balance);
+
+    match (from_account.organization_id, to_account.organization_id) {
+        (Some(from_org_id), Some(to_org_id)) if from_org_id == to_org_id => {
+            let currency = from_account.currency.as_deref().unwrap_or("USD");
+            let started_at = Instant::now();
+            let balances_result = state
+                .ledger_grpc
+                .get_account_balances(
+                    from_org_id,
+                    &environment,
+                    from_account.id,
+                    to_account.id,
+                    currency,
+                )
+                .await;
+            let elapsed_ms = started_at.elapsed().as_millis() as u64;
+            tracing::event!(
+                Level::INFO,
+                target = "accounts.latency",
+                from_account_id = %from_account.id,
+                to_account_id = %to_account.id,
+                operation = "transfer",
+                elapsed_ms,
+                "get_account_balances_timing"
+            );
+
+            match balances_result {
+                Ok((from_balance, to_balance)) => {
+                    from_resp = from_resp.with_balance(negate_ledger_balance_for_display(&from_balance));
+                    to_resp = to_resp.with_balance(negate_ledger_balance_for_display(&to_balance));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        from_account_id = %from_account.id,
+                        to_account_id = %to_account.id,
+                        error = %e,
+                        "Ledger batched balance fetch failed, using 0"
+                    );
+                    from_resp = from_resp.with_balance(0);
+                    to_resp = to_resp.with_balance(0);
+                }
+            }
+        }
+        (Some(_), Some(_)) => {
+            tracing::warn!(
+                from_account_id = %from_account.id,
+                to_account_id = %to_account.id,
+                "Transfer accounts in different organizations; using default balances"
+            );
+        }
+        (Some(org_id), None) => {
+            let currency = from_account.currency.as_deref().unwrap_or("USD");
+            let started_at = Instant::now();
+            let display_balance = state
+                .ledger_grpc
+                .get_account_balance(org_id, &environment, from_account.id, currency)
+                .await
+                .map(|b| negate_ledger_balance_for_display(&b))
+                .unwrap_or_else(|e| {
+                    tracing::warn!(account_id = %from_account.id, error = %e, "Ledger balance fetch failed, using 0");
+                    0
+                });
+            let elapsed_ms = started_at.elapsed().as_millis() as u64;
+            tracing::event!(
+                Level::INFO,
+                target = "accounts.latency",
+                account_id = %from_account.id,
+                operation = "transfer_from_only",
+                elapsed_ms,
+                "get_account_balance_timing"
+            );
+            from_resp = from_resp.with_balance(display_balance);
+        }
+        (None, Some(org_id)) => {
+            let currency = to_account.currency.as_deref().unwrap_or("USD");
+            let started_at = Instant::now();
+            let display_balance = state
+                .ledger_grpc
+                .get_account_balance(org_id, &environment, to_account.id, currency)
+                .await
+                .map(|b| negate_ledger_balance_for_display(&b))
+                .unwrap_or_else(|e| {
+                    tracing::warn!(account_id = %to_account.id, error = %e, "Ledger balance fetch failed, using 0");
+                    0
+                });
+            let elapsed_ms = started_at.elapsed().as_millis() as u64;
+            tracing::event!(
+                Level::INFO,
+                target = "accounts.latency",
+                account_id = %to_account.id,
+                operation = "transfer_to_only",
+                elapsed_ms,
+                "get_account_balance_timing"
+            );
+            to_resp = to_resp.with_balance(display_balance);
+        }
+        (None, None) => {}
     }
 
     let txn_resp = AccountTransactionResponse::for_mutation_response(&transaction, from_resp.balance);

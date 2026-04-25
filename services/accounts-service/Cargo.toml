@@ -61,6 +61,9 @@ tonic-build = "0.12"
 audit_service = { path = "../audit-service" }
 # Testing
 tokio-test = "0.4"
+tower = { version = "0.4", features = ["util"] }
+http-body-util = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "postgres", "uuid", "chrono", "json", "migrate"] }
 tokio-stream = { version = "0.1.18", features = ["net"] }
 testcontainers-modules = { version = "0.15.0", features = ["postgres"] }

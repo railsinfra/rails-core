@@ -25,6 +25,32 @@ use crate::ledger_grpc::LedgerGrpc;
 use crate::routes::rate_limit::{extract_client_key, RateLimitConfig, RateLimiter};
 use crate::users_grpc::UsersGrpc;
 
+fn log_request_boundary(
+    phase: &str,
+    method: &str,
+    path: &str,
+    correlation_id: &str,
+    status: Option<u16>,
+    duration_ms: Option<u64>,
+) {
+    let banner = format!(
+        "-----------------------[{phase} - {} {}]----------------------------",
+        method,
+        path
+    );
+    tracing::info!(
+        target = "accounts.request_boundary",
+        marker = %banner,
+        phase,
+        method,
+        path,
+        correlation_id,
+        status = status.unwrap_or(0),
+        duration_ms = duration_ms.unwrap_or(0),
+        "{banner}"
+    );
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
@@ -104,6 +130,7 @@ async fn correlation_id_middleware(
     }
 
     let start = std::time::Instant::now();
+    log_request_boundary("START", &method, &path, &correlation_id, None, None);
     tracing::info!(correlation_id = %correlation_id, %method, %path, "start");
 
     let mut res = next.run(req).await;
@@ -124,6 +151,14 @@ async fn correlation_id_middleware(
     } else {
         tracing::info!(correlation_id = %correlation_id, %method, %path, status = status, duration_ms = duration_ms as u64, outcome = outcome, "finish");
     }
+    log_request_boundary(
+        "END",
+        &method,
+        &path,
+        &correlation_id,
+        Some(status),
+        Some(duration_ms as u64),
+    );
 
     Ok(res)
 }

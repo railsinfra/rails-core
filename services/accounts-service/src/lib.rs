@@ -126,7 +126,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let grpc_addr = SocketAddr::from(([0, 0, 0, 0], settings.grpc_port));
-    let grpc_service = AccountsGrpcService::new(pool.clone());
+    let grpc_service = AccountsGrpcService::new();
 
     let retry_pool = pool.clone();
     let retry_ledger = ledger_grpc.clone();

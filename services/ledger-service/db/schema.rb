@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.1].define(version: 2026_01_27_000001) do
+ActiveRecord::Schema[7.1].define(version: 2026_04_25_052000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "plpgsql"
 
@@ -40,7 +40,7 @@ ActiveRecord::Schema[7.1].define(version: 2026_01_27_000001) do
     t.index ["environment", "organization_id", "external_account_id", "currency"], name: "idx_ledger_accounts_env_org_external_currency"
     t.index ["organization_id", "environment", "external_account_id", "currency"], name: "index_ledger_accounts_on_org_env_external_currency", unique: true
     t.index ["organization_id", "environment"], name: "index_ledger_accounts_on_org_env"
-    t.check_constraint "account_type::text = ANY (ARRAY['asset'::character varying, 'liability'::character varying, 'equity'::character varying, 'income'::character varying, 'expense'::character varying]::text[])", name: "check_account_type"
+    t.check_constraint "account_type::text = ANY (ARRAY['asset'::character varying::text, 'liability'::character varying::text, 'equity'::character varying::text, 'income'::character varying::text, 'expense'::character varying::text])", name: "check_account_type"
   end
 
   create_table "ledger_entries", id: :uuid, default: -> { "gen_random_uuid()" }, force: :cascade do |t|
@@ -72,7 +72,6 @@ ActiveRecord::Schema[7.1].define(version: 2026_01_27_000001) do
     t.index ["environment", "organization_id", "created_at"], name: "idx_ledger_transactions_env_org_created"
     t.index ["organization_id", "environment", "external_transaction_id"], name: "index_ledger_transactions_on_org_env_external"
     t.index ["organization_id", "environment", "idempotency_key"], name: "index_ledger_transactions_idempotency", unique: true
-    t.index ["organization_id", "environment", "idempotency_key"], name: "index_ledger_transactions_on_org_env_idempotency", unique: true
     t.index ["organization_id", "environment", "status"], name: "index_ledger_transactions_on_org_env_status"
   end
 

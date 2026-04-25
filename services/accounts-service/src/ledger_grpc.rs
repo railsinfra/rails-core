@@ -7,7 +7,7 @@ use tonic::transport::{Channel, Endpoint};
 use crate::errors::AppError;
 use crate::grpc::ledger_proto::{
     ledger_service_client::LedgerServiceClient, Environment, GetAccountBalanceRequest,
-    PostTransactionRequest,
+    GetAccountBalancesRequest, PostTransactionRequest,
 };
 
 #[derive(Clone)]
@@ -147,6 +147,38 @@ impl LedgerGrpc {
 
         Ok(resp.balance)
     }
+
+    pub async fn get_account_balances(
+        &self,
+        organization_id: uuid::Uuid,
+        environment: &str,
+        from_external_account_id: uuid::Uuid,
+        to_external_account_id: uuid::Uuid,
+        currency: &str,
+    ) -> Result<(String, String), AppError> {
+        let env = Self::env_to_proto(environment)?;
+        let channel = self.connect_channel().await?;
+        let mut client = LedgerServiceClient::new(channel);
+
+        let req = GetAccountBalancesRequest {
+            organization_id: organization_id.to_string(),
+            environment: env,
+            from_external_account_id: from_external_account_id.to_string(),
+            to_external_account_id: to_external_account_id.to_string(),
+            currency: currency.to_string(),
+        };
+
+        let resp = tokio::time::timeout(
+            self.timeout,
+            client.get_account_balances(tonic::Request::new(req)),
+        )
+        .await
+        .map_err(|_| AppError::Internal("ledger gRPC get_account_balances timeout expired".to_string()))?
+        .map_err(|e| AppError::Internal(format!("ledger gRPC get_account_balances failed: {}", e)))?
+        .into_inner();
+
+        Ok((resp.from_balance, resp.to_balance))
+    }
 }
 
 #[cfg(test)]
@@ -154,8 +186,8 @@ mod ledger_grpc_tests {
     use super::*;
     use crate::grpc::ledger_proto::ledger_service_server::{LedgerService, LedgerServiceServer};
     use crate::grpc::ledger_proto::{
-        GetAccountBalanceRequest, GetAccountBalanceResponse, PostTransactionRequest,
-        PostTransactionResponse,
+        GetAccountBalanceRequest, GetAccountBalanceResponse, GetAccountBalancesRequest,
+        GetAccountBalancesResponse, PostTransactionRequest, PostTransactionResponse,
     };
     use std::sync::Mutex;
     use tokio_stream::wrappers::TcpListenerStream;
@@ -188,6 +220,17 @@ mod ledger_grpc_tests {
                 currency: "USD".into(),
             }))
         }
+
+        async fn get_account_balances(
+            &self,
+            _req: Request<GetAccountBalancesRequest>,
+        ) -> Result<Response<GetAccountBalancesResponse>, Status> {
+            Ok(Response::new(GetAccountBalancesResponse {
+                from_balance: "-100".into(),
+                to_balance: "-250".into(),
+                currency: "USD".into(),
+            }))
+        }
     }
 
     #[derive(Clone, Default)]
@@ -212,6 +255,17 @@ mod ledger_grpc_tests {
         ) -> Result<Response<GetAccountBalanceResponse>, Status> {
             Ok(Response::new(GetAccountBalanceResponse {
                 balance: "0".into(),
+                currency: "USD".into(),
+            }))
+        }
+
+        async fn get_account_balances(
+            &self,
+            _req: Request<GetAccountBalancesRequest>,
+        ) -> Result<Response<GetAccountBalancesResponse>, Status> {
+            Ok(Response::new(GetAccountBalancesResponse {
+                from_balance: "0".into(),
+                to_balance: "0".into(),
                 currency: "USD".into(),
             }))
         }
@@ -296,6 +350,12 @@ mod ledger_grpc_tests {
             .await
             .unwrap();
         assert_eq!(bal, "-100");
+        let (from_bal, to_bal) = client
+            .get_account_balances(org, &env, ext, ext, "USD")
+            .await
+            .unwrap();
+        assert_eq!(from_bal, "-100");
+        assert_eq!(to_bal, "-250");
         let _ = client.endpoint();
         assert_eq!(client.timeout().as_secs(), 60);
     }
