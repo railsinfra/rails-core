@@ -23,7 +23,7 @@ class AuditAppend
     correlation = ledger_transaction.external_transaction_id.to_s
 
     event = Rails::Core::Audit::V1::AuditEvent.new(
-      occurred_at: Time.now.utc.iso8601(3),
+      occurred_at: Time.current.utc.iso8601(3),
       schema_version: 1,
       source_service: 'ledger',
       organization_id: org_id,
@@ -59,7 +59,7 @@ class AuditAppend
     )
 
     finish_txn = start_sentry_transaction
-    deadline = Time.now + timeout_sec
+    deadline = Time.current + timeout_sec
     stub.append_audit_event(req, deadline: deadline)
   rescue StandardError => e
     Rails.logger.error(
