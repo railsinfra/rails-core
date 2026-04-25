@@ -185,24 +185,29 @@ mod tests {
     #[test]
     fn load_errors_when_database_url_missing() {
         let _l = test_env_lock();
-        let saved_db = std::env::var("DATABASE_URL").ok();
-        std::env::remove_var("DATABASE_URL");
+        const DATABASE_URL_ENV: &str = "DATABASE_URL";
+        let saved_db = std::env::var(DATABASE_URL_ENV).ok();
+        std::env::remove_var(DATABASE_URL_ENV);
         assert!(load().is_err());
-        restore_env("DATABASE_URL", saved_db);
+        restore_env(DATABASE_URL_ENV, saved_db);
     }
 
     #[test]
     fn load_strips_jdbc_prefix_and_reads_optional_env() {
         let _l = test_env_lock();
-        let saved_db = std::env::var("DATABASE_URL").ok();
-        let saved_grpc = std::env::var("GRPC_PORT").ok();
-        let saved_accounts = std::env::var("ACCOUNTS_GRPC_URL").ok();
-        let saved_from = std::env::var("RESEND_FROM_EMAIL").ok();
+        const DATABASE_URL_ENV: &str = "DATABASE_URL";
+        const GRPC_PORT_ENV: &str = "GRPC_PORT";
+        const ACCOUNTS_GRPC_URL_ENV: &str = "ACCOUNTS_GRPC_URL";
+        const RESEND_FROM_EMAIL_ENV: &str = "RESEND_FROM_EMAIL";
+        let saved_db = std::env::var(DATABASE_URL_ENV).ok();
+        let saved_grpc = std::env::var(GRPC_PORT_ENV).ok();
+        let saved_accounts = std::env::var(ACCOUNTS_GRPC_URL_ENV).ok();
+        let saved_from = std::env::var(RESEND_FROM_EMAIL_ENV).ok();
 
-        std::env::set_var("DATABASE_URL", "jdbc:postgresql://db.example:5432/app");
-        std::env::set_var("GRPC_PORT", "60001");
-        std::env::set_var("ACCOUNTS_GRPC_URL", "http://accounts.test:999");
-        std::env::set_var("RESEND_FROM_EMAIL", "custom-from@example.com");
+        std::env::set_var(DATABASE_URL_ENV, "jdbc:postgresql://db.example:5432/app");
+        std::env::set_var(GRPC_PORT_ENV, "60001");
+        std::env::set_var(ACCOUNTS_GRPC_URL_ENV, "http://accounts.test:999");
+        std::env::set_var(RESEND_FROM_EMAIL_ENV, "custom-from@example.com");
 
         let c = load().expect("load");
         assert_eq!(c.database_url, "postgresql://db.example:5432/app");
@@ -210,9 +215,9 @@ mod tests {
         assert_eq!(c.accounts_grpc_url, "http://accounts.test:999");
         assert_eq!(c.resend_from_email, "custom-from@example.com");
 
-        restore_env("DATABASE_URL", saved_db);
-        restore_env("GRPC_PORT", saved_grpc);
-        restore_env("ACCOUNTS_GRPC_URL", saved_accounts);
-        restore_env("RESEND_FROM_EMAIL", saved_from);
+        restore_env(DATABASE_URL_ENV, saved_db);
+        restore_env(GRPC_PORT_ENV, saved_grpc);
+        restore_env(ACCOUNTS_GRPC_URL_ENV, saved_accounts);
+        restore_env(RESEND_FROM_EMAIL_ENV, saved_from);
     }
 }

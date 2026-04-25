@@ -23,7 +23,8 @@ pub(crate) async fn handle_retry_claim_outcome(
 }
 
 pub(crate) fn stale_posting_secs_from_env() -> i64 {
-    std::env::var("TRANSACTION_POSTING_STALE_AFTER_SECS")
+    const TRANSACTION_POSTING_STALE_AFTER_SECS_ENV: &str = "TRANSACTION_POSTING_STALE_AFTER_SECS";
+    std::env::var(TRANSACTION_POSTING_STALE_AFTER_SECS_ENV)
         .ok()
         .and_then(|v| v.parse::<i64>().ok())
         .filter(|&v| v > 0)

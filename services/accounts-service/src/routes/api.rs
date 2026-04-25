@@ -166,12 +166,14 @@ async fn correlation_id_middleware(
 static MONEY_RATE_LIMITER: OnceLock<RateLimiter> = OnceLock::new();
 
 fn money_rate_limit_config() -> RateLimitConfig {
-    let window_seconds = std::env::var("ACCOUNTS_MONEY_RATE_LIMIT_WINDOW_SECONDS")
+    const ACCOUNTS_MONEY_RATE_LIMIT_WINDOW_SECONDS_ENV: &str = "ACCOUNTS_MONEY_RATE_LIMIT_WINDOW_SECONDS";
+    const ACCOUNTS_MONEY_RATE_LIMIT_MAX_ENV: &str = "ACCOUNTS_MONEY_RATE_LIMIT_MAX";
+    let window_seconds = std::env::var(ACCOUNTS_MONEY_RATE_LIMIT_WINDOW_SECONDS_ENV)
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .filter(|v| *v > 0)
         .unwrap_or(60);
-    let max_requests = std::env::var("ACCOUNTS_MONEY_RATE_LIMIT_MAX")
+    let max_requests = std::env::var(ACCOUNTS_MONEY_RATE_LIMIT_MAX_ENV)
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
         .filter(|v| *v > 0)

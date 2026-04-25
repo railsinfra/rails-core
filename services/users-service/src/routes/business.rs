@@ -146,7 +146,8 @@ async fn register_business_inner(
         "env": selected_environment_id.to_string(),
         "business_id": business_id.to_string(),
     });
-    let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "dev_secret".to_string());
+    const JWT_SECRET_ENV: &str = "JWT_SECRET";
+    let secret = std::env::var(JWT_SECRET_ENV).unwrap_or_else(|_| "dev_secret".to_string());
     let access_token = encode(
         &Header::default(),
         &claims,
@@ -267,7 +268,8 @@ mod tests {
     use sqlx::postgres::PgPoolOptions;
 
     async fn test_pool() -> Option<sqlx::PgPool> {
-        let database_url = std::env::var("DATABASE_URL").ok()?;
+        const DATABASE_URL_ENV: &str = "DATABASE_URL";
+        let database_url = std::env::var(DATABASE_URL_ENV).ok()?;
         let pool = PgPoolOptions::new()
             .max_connections(2)
             .connect(&database_url)

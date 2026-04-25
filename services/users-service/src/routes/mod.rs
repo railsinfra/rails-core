@@ -67,7 +67,8 @@ async fn internal_caller_middleware(req: Request<Body>, next: Next) -> Result<Re
         return Ok(next.run(req).await);
     }
 
-    let allowlist_raw = std::env::var("INTERNAL_SERVICE_TOKEN_ALLOWLIST").unwrap_or_default();
+    const INTERNAL_SERVICE_TOKEN_ALLOWLIST_ENV: &str = "INTERNAL_SERVICE_TOKEN_ALLOWLIST";
+    let allowlist_raw = std::env::var(INTERNAL_SERVICE_TOKEN_ALLOWLIST_ENV).unwrap_or_default();
     if allowlist_raw.trim().is_empty() {
         return Ok(next.run(req).await);
     }
@@ -182,12 +183,14 @@ async fn correlation_id_middleware(req: Request<Body>, next: Next) -> Result<Res
 static AUTH_RATE_LIMITER: OnceLock<RateLimiter> = OnceLock::new();
 
 fn auth_rate_limit_config() -> RateLimitConfig {
-    let window_seconds = std::env::var("USERS_AUTH_RATE_LIMIT_WINDOW_SECONDS")
+    const USERS_AUTH_RATE_LIMIT_WINDOW_SECONDS_ENV: &str = "USERS_AUTH_RATE_LIMIT_WINDOW_SECONDS";
+    const USERS_AUTH_RATE_LIMIT_MAX_ENV: &str = "USERS_AUTH_RATE_LIMIT_MAX";
+    let window_seconds = std::env::var(USERS_AUTH_RATE_LIMIT_WINDOW_SECONDS_ENV)
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .filter(|v| *v > 0)
         .unwrap_or(60);
-    let max_requests = std::env::var("USERS_AUTH_RATE_LIMIT_MAX")
+    let max_requests = std::env::var(USERS_AUTH_RATE_LIMIT_MAX_ENV)
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
         .filter(|v| *v > 0)

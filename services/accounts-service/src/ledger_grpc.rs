@@ -19,7 +19,8 @@ pub struct LedgerGrpc {
 
 impl LedgerGrpc {
     pub fn new(endpoint: String) -> Self {
-        let timeout_secs = std::env::var("LEDGER_GRPC_TIMEOUT_SECS")
+        const LEDGER_GRPC_TIMEOUT_SECS_ENV: &str = "LEDGER_GRPC_TIMEOUT_SECS";
+        let timeout_secs = std::env::var(LEDGER_GRPC_TIMEOUT_SECS_ENV)
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .filter(|v| *v > 0)

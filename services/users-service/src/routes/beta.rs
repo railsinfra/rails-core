@@ -220,7 +220,8 @@ mod tests {
 
     #[tokio::test]
     async fn apply_for_beta_persists_and_sends_email() {
-        let database_url = match std::env::var("DATABASE_URL") {
+        const DATABASE_URL_ENV: &str = "DATABASE_URL";
+        let database_url = match std::env::var(DATABASE_URL_ENV) {
             Ok(value) => value,
             Err(_) => {
                 eprintln!("DATABASE_URL not set; skipping beta application integration test.");
@@ -308,7 +309,8 @@ mod tests {
 
     #[tokio::test]
     async fn apply_for_beta_succeeds_without_email_service() {
-        let database_url = match std::env::var("DATABASE_URL") {
+        const DATABASE_URL_ENV: &str = "DATABASE_URL";
+        let database_url = match std::env::var(DATABASE_URL_ENV) {
             Ok(value) => value,
             Err(_) => {
                 eprintln!("DATABASE_URL not set; skipping beta application integration test.");

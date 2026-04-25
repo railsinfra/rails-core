@@ -38,7 +38,8 @@ fn env_lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 async fn test_pool() -> Option<sqlx::PgPool> {
-    let database_url = std::env::var("DATABASE_URL").ok()?;
+    const DATABASE_URL_ENV: &str = "DATABASE_URL";
+    let database_url = std::env::var(DATABASE_URL_ENV).ok()?;
     let pool = PgPoolOptions::new()
         .max_connections(3)
         .acquire_timeout(std::time::Duration::from_secs(60))
@@ -86,7 +87,8 @@ async fn db_init_succeeds_when_database_url_valid() {
             return;
         }
     };
-    let url = std::env::var("DATABASE_URL").unwrap();
+    const DATABASE_URL_ENV: &str = "DATABASE_URL";
+    let url = std::env::var(DATABASE_URL_ENV).unwrap();
     let fresh = db::init(&url).await.expect("db::init");
     sqlx::query("SELECT 1")
         .fetch_one(&fresh)
