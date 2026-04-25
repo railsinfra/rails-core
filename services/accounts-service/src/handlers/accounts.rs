@@ -162,8 +162,11 @@ pub async fn create_account(
     let mut holder_org_on_err: Option<Uuid> = None;
 
     let account_res: Result<Account, AppError> = if is_holder_path {
-        let api_key = extract_api_key(&headers)
-            .ok_or_else(|| AppError::Validation("X-API-Key header is required for holder-based account creation".to_string()))?;
+        let api_key = extract_api_key(&headers).ok_or_else(|| {
+            AppError::Validation(
+                "X-API-Key header is required for holder-based account creation".to_string(),
+            )
+        })?;
         match state
             .users_grpc
             .validate_api_key(&api_key, &environment)
@@ -185,7 +188,7 @@ pub async fn create_account(
         AccountService::create_account(&state.pool, request).await
     };
 
-    let mut meta = HashMap::new();
+    let mut meta = HashMap::default();
     match &account_res {
         Ok(account) => {
             if let Some(org) = account.organization_id {
@@ -292,7 +295,7 @@ pub async fn list_accounts(
 ) -> Result<Json<PaginatedAccountsResponse>, AppError> {
     // Extract environment from header (defaults to sandbox if missing)
     let environment = extract_environment(&headers)?;
-    
+
     // Parse and validate pagination params with defaults
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(10).min(100).max(1);
@@ -302,14 +305,36 @@ pub async fn list_accounts(
     // 2. organization_id: Get all accounts in an organization (for admins)
     // 3. admin_user_id: Get accounts managed by an admin (customer accounts)
     let result = if let Some(user_id) = query.user_id {
-        AccountService::get_accounts_by_user_paginated(&state.pool, user_id, &environment, page, per_page).await?
+        AccountService::get_accounts_by_user_paginated(
+            &state.pool,
+            user_id,
+            &environment,
+            page,
+            per_page,
+        )
+        .await?
     } else if let Some(organization_id) = query.organization_id {
-        AccountService::get_accounts_by_organization_paginated(&state.pool, organization_id, &environment, page, per_page).await?
+        AccountService::get_accounts_by_organization_paginated(
+            &state.pool,
+            organization_id,
+            &environment,
+            page,
+            per_page,
+        )
+        .await?
     } else if let Some(admin_user_id) = query.admin_user_id {
-        AccountService::get_accounts_by_admin_paginated(&state.pool, admin_user_id, &environment, page, per_page).await?
+        AccountService::get_accounts_by_admin_paginated(
+            &state.pool,
+            admin_user_id,
+            &environment,
+            page,
+            per_page,
+        )
+        .await?
     } else {
         return Err(AppError::Validation(
-            "One of user_id, organization_id, or admin_user_id query parameter is required".to_string()
+            "One of user_id, organization_id, or admin_user_id query parameter is required"
+                .to_string(),
         ));
     };
 
@@ -325,13 +350,12 @@ pub async fn update_account_status(
 ) -> Result<Json<AccountResponse>, AppError> {
     let environment = extract_environment(&headers)?;
 
-    let status = request.status.ok_or_else(|| {
-        AppError::Validation("status field is required".to_string())
-    })?;
+    let status = request
+        .status
+        .ok_or_else(|| AppError::Validation("status field is required".to_string()))?;
 
     let path = format!("/api/v1/accounts/{id}");
-    let result =
-        AccountService::update_account_status(&state.pool, id, &environment, status).await;
+    let result = AccountService::update_account_status(&state.pool, id, &environment, status).await;
     let org = match &result {
         Ok(account) => account.organization_id,
         Err(_) => AccountService::get_account(&state.pool, id, &environment)
@@ -340,7 +364,7 @@ pub async fn update_account_status(
             .and_then(|a| a.organization_id),
     };
     if let Some(org) = org {
-        let mut meta = HashMap::new();
+        let mut meta = HashMap::default();
         if result.is_ok() {
             meta.insert("new_status".into(), format!("{status:?}"));
         } else if let Err(e) = &result {
@@ -397,7 +421,7 @@ pub async fn close_account(
             .and_then(|a| a.organization_id),
     };
     if let Some(org) = org {
-        let mut meta = HashMap::new();
+        let mut meta = HashMap::default();
         if result.is_ok() {
             meta.insert("new_status".into(), "closed".into());
         } else if let Err(e) = &result {
@@ -455,7 +479,9 @@ pub async fn deposit(
         .ok_or_else(|| AppError::Validation("Idempotency-Key header is required".to_string()))?;
 
     if request.amount <= 0 {
-        return Err(AppError::Validation("Amount must be greater than zero".to_string()));
+        return Err(AppError::Validation(
+            "Amount must be greater than zero".to_string(),
+        ));
     }
 
     let correlation_id = headers
@@ -509,7 +535,7 @@ pub async fn deposit(
             .and_then(|a| a.organization_id),
     };
     if let Some(org) = org {
-        let mut meta = HashMap::new();
+        let mut meta = HashMap::default();
         meta.insert("idempotency_key_present".into(), "true".into());
         if let Err(e) = &deposit_result {
             meta.insert(
@@ -571,7 +597,8 @@ pub async fn deposit(
         account_resp = account_resp.with_balance(display_balance);
     }
 
-    let txn_resp = AccountTransactionResponse::for_mutation_response(&transaction, account_resp.balance);
+    let txn_resp =
+        AccountTransactionResponse::for_mutation_response(&transaction, account_resp.balance);
     Ok((
         StatusCode::OK,
         Json(serde_json::json!({
@@ -599,7 +626,9 @@ pub async fn withdraw(
         .ok_or_else(|| AppError::Validation("Idempotency-Key header is required".to_string()))?;
 
     if request.amount <= 0 {
-        return Err(AppError::Validation("Amount must be greater than zero".to_string()));
+        return Err(AppError::Validation(
+            "Amount must be greater than zero".to_string(),
+        ));
     }
 
     let correlation_id = headers
@@ -630,7 +659,7 @@ pub async fn withdraw(
             .and_then(|a| a.organization_id),
     };
     if let Some(org) = org {
-        let mut meta = HashMap::new();
+        let mut meta = HashMap::default();
         meta.insert("idempotency_key_present".into(), "true".into());
         if let Err(e) = &withdraw_result {
             meta.insert(
@@ -692,7 +721,8 @@ pub async fn withdraw(
         account_resp = account_resp.with_balance(display_balance);
     }
 
-    let txn_resp = AccountTransactionResponse::for_mutation_response(&transaction, account_resp.balance);
+    let txn_resp =
+        AccountTransactionResponse::for_mutation_response(&transaction, account_resp.balance);
     Ok((
         StatusCode::OK,
         Json(serde_json::json!({
@@ -720,7 +750,9 @@ pub async fn transfer(
         .ok_or_else(|| AppError::Validation("Idempotency-Key header is required".to_string()))?;
 
     if request.amount <= 0 {
-        return Err(AppError::Validation("Amount must be greater than zero".to_string()));
+        return Err(AppError::Validation(
+            "Amount must be greater than zero".to_string(),
+        ));
     }
 
     let correlation_id = headers
@@ -775,7 +807,7 @@ pub async fn transfer(
             .and_then(|a| a.organization_id),
     };
     if let Some(org) = org {
-        let mut meta = HashMap::new();
+        let mut meta = HashMap::default();
         meta.insert("idempotency_key_present".into(), "true".into());
         if let Err(e) = &transfer_result {
             meta.insert(
@@ -842,7 +874,8 @@ pub async fn transfer(
 
             match balances_result {
                 Ok((from_balance, to_balance)) => {
-                    from_resp = from_resp.with_balance(negate_ledger_balance_for_display(&from_balance));
+                    from_resp =
+                        from_resp.with_balance(negate_ledger_balance_for_display(&from_balance));
                     to_resp = to_resp.with_balance(negate_ledger_balance_for_display(&to_balance));
                 }
                 Err(e) => {
@@ -913,7 +946,8 @@ pub async fn transfer(
         (None, None) => {}
     }
 
-    let txn_resp = AccountTransactionResponse::for_mutation_response(&transaction, from_resp.balance);
+    let txn_resp =
+        AccountTransactionResponse::for_mutation_response(&transaction, from_resp.balance);
     Ok((
         StatusCode::OK,
         Json(serde_json::json!({
@@ -933,9 +967,9 @@ where
     use serde::de::Error;
     let v = serde_json::Value::deserialize(deserializer)?;
     match v {
-        serde_json::Value::Number(n) => {
-            n.as_i64().ok_or_else(|| D::Error::custom("amount must be a valid integer"))
-        }
+        serde_json::Value::Number(n) => n
+            .as_i64()
+            .ok_or_else(|| D::Error::custom("amount must be a valid integer")),
         serde_json::Value::String(s) => {
             let s = s.trim();
             if let Ok(n) = s.parse::<i64>() {
@@ -943,7 +977,9 @@ where
             } else if let Ok(f) = s.parse::<f64>() {
                 Ok((f * 100.0).round() as i64)
             } else {
-                Err(D::Error::custom("amount must be a number or numeric string"))
+                Err(D::Error::custom(
+                    "amount must be a number or numeric string",
+                ))
             }
         }
         _ => Err(D::Error::custom("amount must be a number or string")),
@@ -1032,7 +1068,8 @@ mod tests {
 
     #[test]
     fn deserialize_amount_transfer_request() {
-        let json = r#"{"to_account_id": "550e8400-e29b-41d4-a716-446655440000", "amount": "50.50"}"#;
+        let json =
+            r#"{"to_account_id": "550e8400-e29b-41d4-a716-446655440000", "amount": "50.50"}"#;
         let req: TransferRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.amount, 5050);
     }

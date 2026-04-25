@@ -78,14 +78,14 @@ pub fn truncate_reason(s: &str) -> String {
 
 /// Deadline for each `AppendAuditEvent` RPC. Remote Postgres (e.g. Neon) often needs >400ms.
 fn audit_append_deadline() -> Duration {
+    const AUDIT_APPEND_TIMEOUT_MS_ENV: &str = "AUDIT_APPEND_TIMEOUT_MS";
     const DEFAULT_MS: u64 = 5_000;
     const MAX_MS: u64 = 120_000;
-    std::env::var("AUDIT_APPEND_TIMEOUT_MS")
+    std::env::var(AUDIT_APPEND_TIMEOUT_MS_ENV)
         .ok()
         .and_then(|s| s.trim().parse::<u64>().ok())
         .filter(|&ms| ms > 0 && ms <= MAX_MS)
-        .map(Duration::from_millis)
-        .unwrap_or_else(|| Duration::from_millis(DEFAULT_MS))
+        .map_or_else(|| Duration::from_millis(DEFAULT_MS), Duration::from_millis)
 }
 
 /// Best-effort audit RPC (`AUDIT_APPEND_TIMEOUT_MS`, default 5s). Logs + Sentry on errors; never affects HTTP status.
@@ -110,10 +110,8 @@ pub async fn emit_accounts_mutation(
         return;
     };
 
-    let txn = sentry::start_transaction(TransactionContext::new(
-        "accounts.audit.emit",
-        "audit.emit",
-    ));
+    let txn =
+        sentry::start_transaction(TransactionContext::new("accounts.audit.emit", "audit.emit"));
     sentry::configure_scope(|scope| {
         scope.set_tag("audit.action", action);
     });
@@ -192,10 +190,7 @@ pub async fn emit_accounts_mutation(
                 scope.set_tag("audit.action", action);
                 scope.set_tag("correlation_id", cid.as_str());
             });
-            sentry::capture_message(
-                &format!("audit-append-failure: {e}"),
-                sentry::Level::Error,
-            );
+            sentry::capture_message(&format!("audit-append-failure: {e}"), sentry::Level::Error);
         }
     }
     txn.finish();
@@ -244,9 +239,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let incoming = TcpListenerStream::new(listener);
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-        let svc = CountingAudit {
-            hits: hits.clone(),
-        };
+        let svc = CountingAudit { hits: hits.clone() };
         let server = Server::builder()
             .add_service(AuditServiceServer::new(svc))
             .serve_with_incoming_shutdown(incoming, async {
@@ -256,9 +249,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(40)).await;
 
         let endpoint = format!("http://{addr}");
-        let ch = Endpoint::from_shared(endpoint)
-            .unwrap()
-            .connect_lazy();
+        let ch = Endpoint::from_shared(endpoint).unwrap().connect_lazy();
         let client = Some(AuditServiceClient::new(ch));
 
         let mut headers = HeaderMap::new();
