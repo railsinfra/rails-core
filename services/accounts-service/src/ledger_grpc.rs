@@ -141,7 +141,9 @@ impl LedgerGrpc {
             client.get_account_balance(tonic::Request::new(req)),
         )
         .await
-        .map_err(|_| AppError::Internal("ledger gRPC get_account_balance timeout expired".to_string()))?
+        .map_err(|_| {
+            AppError::Internal("ledger gRPC get_account_balance timeout expired".to_string())
+        })?
         .map_err(|e| AppError::Internal(format!("ledger gRPC get_account_balance failed: {}", e)))?
         .into_inner();
 
@@ -173,7 +175,9 @@ impl LedgerGrpc {
             client.get_account_balances(tonic::Request::new(req)),
         )
         .await
-        .map_err(|_| AppError::Internal("ledger gRPC get_account_balances timeout expired".to_string()))?
+        .map_err(|_| {
+            AppError::Internal("ledger gRPC get_account_balances timeout expired".to_string())
+        })?
         .map_err(|e| AppError::Internal(format!("ledger gRPC get_account_balances failed: {}", e)))?
         .into_inner();
 
@@ -206,8 +210,8 @@ mod ledger_grpc_tests {
         ) -> Result<Response<PostTransactionResponse>, Status> {
             Ok(Response::new(PostTransactionResponse {
                 status: "posted".into(),
-                ledger_transaction_id: String::new(),
-                failure_reason: String::new(),
+                ledger_transaction_id: String::default(),
+                failure_reason: String::default(),
             }))
         }
 
@@ -244,7 +248,7 @@ mod ledger_grpc_tests {
         ) -> Result<Response<PostTransactionResponse>, Status> {
             Ok(Response::new(PostTransactionResponse {
                 status: "rejected".into(),
-                ledger_transaction_id: String::new(),
+                ledger_transaction_id: String::default(),
                 failure_reason: "insufficient funds".into(),
             }))
         }
@@ -332,17 +336,7 @@ mod ledger_grpc_tests {
             .await
             .unwrap();
         client
-            .post_transaction(
-                org,
-                &env,
-                src,
-                dst,
-                amt,
-                cur,
-                ext,
-                idem,
-                corr,
-            )
+            .post_transaction(org, &env, src, dst, amt, cur, ext, idem, corr)
             .await
             .unwrap();
         let bal = client
@@ -379,17 +373,7 @@ mod ledger_grpc_tests {
         let client = LedgerGrpc::new(url);
         let (org, _env, src, dst, amt, cur, ext, idem, corr) = sample_post_args();
         let err = client
-            .post_transaction(
-                org,
-                "invalid-env",
-                src,
-                dst,
-                amt,
-                cur,
-                ext,
-                idem,
-                corr,
-            )
+            .post_transaction(org, "invalid-env", src, dst, amt, cur, ext, idem, corr)
             .await
             .unwrap_err();
         assert!(format!("{}", err).contains("invalid environment"));

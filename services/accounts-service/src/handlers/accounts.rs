@@ -203,7 +203,7 @@ pub async fn create_account(
                 } else if let Some(uid) = account.user_id {
                     (ActorType::User, uid.to_string())
                 } else {
-                    (ActorType::Anonymous, String::new())
+                    (ActorType::Anonymous, String::default())
                 };
                 spawn_audit_emit(
                     state.audit_client.clone(),
@@ -244,7 +244,7 @@ pub async fn create_account(
                     "accounts.account.create",
                     org,
                     ActorType::Anonymous,
-                    String::new(),
+                    String::default(),
                     vec![],
                     "account",
                     Uuid::nil(),
@@ -390,7 +390,7 @@ pub async fn update_account_status(
             "accounts.account.update_status",
             org,
             ActorType::Anonymous,
-            String::new(),
+            String::default(),
             vec![],
             "account",
             id,
@@ -447,7 +447,7 @@ pub async fn close_account(
             "accounts.account.close",
             org,
             ActorType::Anonymous,
-            String::new(),
+            String::default(),
             vec![],
             "account",
             id,
@@ -560,7 +560,7 @@ pub async fn deposit(
             "accounts.money.deposit",
             org,
             ActorType::Anonymous,
-            String::new(),
+            String::default(),
             vec![],
             "account",
             id,
@@ -684,7 +684,7 @@ pub async fn withdraw(
             "accounts.money.withdraw",
             org,
             ActorType::Anonymous,
-            String::new(),
+            String::default(),
             vec![],
             "account",
             id,
@@ -832,7 +832,7 @@ pub async fn transfer(
             "accounts.money.transfer",
             org,
             ActorType::Anonymous,
-            String::new(),
+            String::default(),
             vec![],
             "account",
             from_id,

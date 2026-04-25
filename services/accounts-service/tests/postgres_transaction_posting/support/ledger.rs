@@ -39,8 +39,8 @@ impl LedgerService for MockLedger {
         }
         Ok(Response::new(PostTransactionResponse {
             status: "posted".into(),
-            ledger_transaction_id: String::new(),
-            failure_reason: String::new(),
+            ledger_transaction_id: String::default(),
+            failure_reason: String::default(),
         }))
     }
 

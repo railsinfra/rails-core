@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use accounts_api::grpc::audit_channel;
 use accounts_api::grpc::audit_proto::audit_service_server::{AuditService, AuditServiceServer};
 use accounts_api::grpc::audit_proto::{AppendAuditEventRequest, AppendAuditEventResponse};
 use accounts_api::grpc::ledger_proto::ledger_service_server::{LedgerService, LedgerServiceServer};
@@ -8,10 +9,11 @@ use accounts_api::grpc::ledger_proto::{
     GetAccountBalanceRequest, GetAccountBalanceResponse, GetAccountBalancesRequest,
     GetAccountBalancesResponse, PostTransactionRequest, PostTransactionResponse,
 };
-use accounts_api::grpc::audit_channel;
 use accounts_api::ledger_grpc::LedgerGrpc;
 use accounts_api::routes::create_router;
-use accounts_api::users_grpc::users_proto::users_service_server::{UsersService, UsersServiceServer};
+use accounts_api::users_grpc::users_proto::users_service_server::{
+    UsersService, UsersServiceServer,
+};
 use accounts_api::users_grpc::users_proto::{ValidateApiKeyRequest, ValidateApiKeyResponse};
 
 use axum::serve;
@@ -129,8 +131,8 @@ impl LedgerService for LedgerOk {
     ) -> Result<GrpcResponse<PostTransactionResponse>, Status> {
         Ok(GrpcResponse::new(PostTransactionResponse {
             status: "posted".into(),
-            ledger_transaction_id: String::new(),
-            failure_reason: String::new(),
+            ledger_transaction_id: String::default(),
+            failure_reason: String::default(),
         }))
     }
 
