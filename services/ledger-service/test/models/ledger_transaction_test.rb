@@ -29,41 +29,47 @@ class LedgerTransactionTest < ActiveSupport::TestCase
 
   test "mark_as_posted triggers audit append hook" do
     spy = Minitest::Mock.new
-    original = AuditAppend.method(:emit_ledger_transaction_posted)
-    AuditAppend.define_singleton_method(:emit_ledger_transaction_posted) { |arg| spy.call(arg) }
+    meta = AuditAppend.singleton_class
+    original = meta.instance_method(:emit_ledger_transaction_posted)
+    begin
+      meta.define_method(:emit_ledger_transaction_posted) { |arg| spy.call(arg) }
 
-    org = SecureRandom.uuid
-    tx = LedgerTransaction.create!(
-      organization_id: org,
-      environment: "sandbox",
-      external_transaction_id: SecureRandom.uuid,
-      status: "pending",
-      idempotency_key: SecureRandom.uuid
-    )
-    spy.expect :call, nil, [tx]
-    tx.mark_as_posted!
-    spy.verify
-  ensure
-    AuditAppend.define_singleton_method(:emit_ledger_transaction_posted, original)
+      org = SecureRandom.uuid
+      tx = LedgerTransaction.create!(
+        organization_id: org,
+        environment: "sandbox",
+        external_transaction_id: SecureRandom.uuid,
+        status: "pending",
+        idempotency_key: SecureRandom.uuid
+      )
+      spy.expect :call, nil, [tx]
+      tx.mark_as_posted!
+      spy.verify
+    ensure
+      meta.define_method(:emit_ledger_transaction_posted, original)
+    end
   end
 
   test "mark_as_failed does not trigger audit append hook" do
     calls = []
-    original = AuditAppend.method(:emit_ledger_transaction_posted)
-    AuditAppend.define_singleton_method(:emit_ledger_transaction_posted) { |arg| calls << arg }
+    meta = AuditAppend.singleton_class
+    original = meta.instance_method(:emit_ledger_transaction_posted)
+    begin
+      meta.define_method(:emit_ledger_transaction_posted) { |arg| calls << arg }
 
-    org = SecureRandom.uuid
-    tx = LedgerTransaction.create!(
-      organization_id: org,
-      environment: "sandbox",
-      external_transaction_id: SecureRandom.uuid,
-      status: "pending",
-      idempotency_key: SecureRandom.uuid
-    )
-    tx.mark_as_failed!(reason: "nope")
-    assert_empty calls
-  ensure
-    AuditAppend.define_singleton_method(:emit_ledger_transaction_posted, original)
+      org = SecureRandom.uuid
+      tx = LedgerTransaction.create!(
+        organization_id: org,
+        environment: "sandbox",
+        external_transaction_id: SecureRandom.uuid,
+        status: "pending",
+        idempotency_key: SecureRandom.uuid
+      )
+      tx.mark_as_failed!(reason: "nope")
+      assert_empty calls
+    ensure
+      meta.define_method(:emit_ledger_transaction_posted, original)
+    end
   end
 
   test "mark_as_failed sets status and reason" do
