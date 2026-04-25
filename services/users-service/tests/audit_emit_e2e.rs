@@ -39,7 +39,8 @@ async fn start_audit_stack() -> (
     let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
 
     let pool = PgPoolOptions::new()
-        .max_connections(5)
+        .max_connections(15)
+        .acquire_timeout(Duration::from_secs(90))
         .connect(&url)
         .await
         .expect("connect");
@@ -62,7 +63,7 @@ async fn start_audit_stack() -> (
             },
         );
     let join = tokio::spawn(serve);
-    tokio::time::sleep(Duration::from_millis(80)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     let ch = Endpoint::from_shared(format!("http://{addr}"))
         .unwrap()
@@ -73,7 +74,9 @@ async fn start_audit_stack() -> (
     (pool, grpc, join, shutdown_tx)
 }
 
-#[tokio::test]
+// Multi-thread: tonic server runs on spawned tasks; a single-thread test runtime can deadlock
+// waiting on the client while the server never gets polled → sqlx pool acquire timeouts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker (testcontainers); CI runs: cargo test --locked -- --include-ignored"]
 async fn users_emit_persists_audit_row() {
     let (pool, grpc, join, shutdown_tx) = start_audit_stack().await;
@@ -84,6 +87,7 @@ async fn users_emit_persists_audit_row() {
         "x-correlation-id",
         correlation_id.parse().expect("header value"),
     );
+    headers.insert("x-environment", "sandbox".parse().unwrap());
 
     let peer = SocketAddr::from(([127, 0, 0, 1], 42_042));
     let target_user = Uuid::new_v4();

@@ -37,7 +37,8 @@ async fn start_audit_stack() -> (
     let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
 
     let pool = PgPoolOptions::new()
-        .max_connections(5)
+        .max_connections(15)
+        .acquire_timeout(Duration::from_secs(90))
         .connect(&url)
         .await
         .expect("connect");
@@ -60,7 +61,7 @@ async fn start_audit_stack() -> (
             },
         );
     let join = tokio::spawn(serve);
-    tokio::time::sleep(Duration::from_millis(80)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     let ch = Endpoint::from_shared(format!("http://{addr}"))
         .unwrap()
@@ -70,7 +71,8 @@ async fn start_audit_stack() -> (
     (pool, Some(client), join, shutdown_tx)
 }
 
-#[tokio::test]
+// Multi-thread: see users-service `audit_emit_e2e` — tonic + sqlx need concurrent polling under CI.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker (testcontainers); CI runs: cargo test --locked -- --include-ignored"]
 async fn accounts_emit_persists_audit_row() {
     let (pool, audit_client, join, shutdown_tx) = start_audit_stack().await;

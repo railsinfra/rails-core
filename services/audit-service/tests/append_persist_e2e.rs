@@ -20,7 +20,7 @@ use tonic::transport::Server;
 use tonic::Request;
 use uuid::Uuid;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker (testcontainers); CI runs: cargo test --locked -- --include-ignored"]
 async fn append_audit_event_persists_row() {
     let container = Postgres::default()
@@ -35,7 +35,8 @@ async fn append_audit_event_persists_row() {
     let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
 
     let pool = PgPoolOptions::new()
-        .max_connections(5)
+        .max_connections(15)
+        .acquire_timeout(Duration::from_secs(90))
         .connect(&url)
         .await
         .expect("connect");
@@ -58,7 +59,7 @@ async fn append_audit_event_persists_row() {
             },
         );
     let join = tokio::spawn(serve);
-    tokio::time::sleep(Duration::from_millis(80)).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
     let mut client = AuditServiceClient::connect(format!("http://{addr}"))
         .await
