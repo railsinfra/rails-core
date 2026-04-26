@@ -5,8 +5,8 @@ require 'bundler/setup'
 require 'active_record'
 require 'pg'
 
-# Load database config
-DATABASE_URL = "postgresql://neondb_owner:npg_6LTzUMvFi0Qe@ep-icy-mouse-acf5xu9j-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+# Load database config — never commit credentials in this repo. Set DATABASE_URL (see config/database.yml).
+DATABASE_URL = ENV["DATABASE_URL"] || "postgresql://localhost:5432/ledger_test"
 
 ActiveRecord::Base.establish_connection(
   adapter: 'postgresql',
