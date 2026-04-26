@@ -28,11 +28,11 @@ class LedgerTransactionTest < ActiveSupport::TestCase
   end
 
   test "mark_as_posted triggers audit append hook" do
-    spy = Minitest::Mock.new
+    calls = []
     meta = AuditAppend.singleton_class
     original = meta.instance_method(:emit_ledger_transaction_posted)
     begin
-      meta.define_method(:emit_ledger_transaction_posted) { |arg| spy.call(arg) }
+      meta.define_method(:emit_ledger_transaction_posted) { |arg| calls << arg }
 
       org = SecureRandom.uuid
       tx = LedgerTransaction.create!(
@@ -42,9 +42,9 @@ class LedgerTransactionTest < ActiveSupport::TestCase
         status: "pending",
         idempotency_key: SecureRandom.uuid
       )
-      spy.expect :call, nil, [tx]
       tx.mark_as_posted!
-      spy.verify
+      assert_equal 1, calls.size
+      assert_equal tx.id, calls.first.id
     ensure
       meta.define_method(:emit_ledger_transaction_posted, original)
     end
