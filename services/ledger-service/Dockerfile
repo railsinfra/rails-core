@@ -17,9 +17,15 @@ ENV RAILS_ENV="production" \
 # Throw-away build stage to reduce size of final image
 FROM base as build
 
-# Install packages needed to build gems
+# Install packages needed to build gems (bookworm pins; libvips-dev for ruby-vips native build)
 RUN apt-get update -qq && \
-    apt-get install --no-install-recommends -y build-essential git libpq-dev libvips pkg-config
+    apt-get install --no-install-recommends -y \
+    build-essential=12.9 \
+    git=1:2.39.5-0+deb12u3 \
+    libpq-dev=15.16-0+deb12u1 \
+    libvips-dev=8.14.1-3+deb12u2 \
+    pkg-config=1.8.1-1 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install application gems
 COPY Gemfile Gemfile.lock ./
@@ -33,10 +39,13 @@ COPY . .
 # Final stage for app image
 FROM base
 
-# Install packages needed for deployment
+# Install packages needed for deployment (libvips42 satisfies ruby-vips at runtime)
 RUN apt-get update -qq && \
-    apt-get install --no-install-recommends -y curl libvips postgresql-client && \
-    rm -rf /var/lib/apt/lists /var/cache/apt/archives
+    apt-get install --no-install-recommends -y \
+    curl=7.88.1-10+deb12u14 \
+    libvips42=8.14.1-3+deb12u2 \
+    postgresql-client=15+248+deb12u1 \
+    && rm -rf /var/lib/apt/lists /var/cache/apt/archives
 
 # Copy built artifacts: gems, application
 COPY --from=build /usr/local/bundle /usr/local/bundle
