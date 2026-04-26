@@ -41,12 +41,18 @@ use users_service::routes::user::me;
 use users_service::routes::{register_routes, AppState};
 use users_service::test_support::test_connect_info;
 
+/// Environment keys as `const` values (not string literals at `set_var` / `remove_var` / `var` sites).
+/// Matches production style and satisfies static analyzers that flag raw literals (e.g. DeepSource RS-W1015).
+const DATABASE_URL_ENV: &str = "DATABASE_URL";
+const JWT_SECRET_ENV: &str = "JWT_SECRET";
+const API_KEY_HASH_SECRET_ENV: &str = "API_KEY_HASH_SECRET";
+const INTERNAL_SERVICE_TOKEN_ALLOWLIST_ENV: &str = "INTERNAL_SERVICE_TOKEN_ALLOWLIST";
+
 fn env_lock() -> std::sync::MutexGuard<'static, ()> {
     users_service::test_support::global_test_lock()
 }
 
 async fn test_pool() -> Option<sqlx::PgPool> {
-    const DATABASE_URL_ENV: &str = "DATABASE_URL";
     let database_url = std::env::var(DATABASE_URL_ENV).ok()?;
     let pool = PgPoolOptions::new()
         .max_connections(3)
@@ -130,7 +136,6 @@ async fn db_init_succeeds_when_database_url_valid() {
             return;
         }
     };
-    const DATABASE_URL_ENV: &str = "DATABASE_URL";
     let url = std::env::var(DATABASE_URL_ENV).unwrap();
     let fresh = db::init(&url).await.expect("db::init");
     sqlx::query("SELECT 1")
@@ -144,8 +149,8 @@ async fn db_init_succeeds_when_database_url_valid() {
 #[tokio::test]
 async fn register_login_me_refresh_revoke_api_keys_and_grpc_validate() {
     let _lock = env_lock();
-    std::env::set_var("JWT_SECRET", "integration_test_jwt_secret");
-    std::env::set_var("API_KEY_HASH_SECRET", "integration_test_api_key_hash");
+    std::env::set_var(JWT_SECRET_ENV, "integration_test_jwt_secret");
+    std::env::set_var(API_KEY_HASH_SECRET_ENV, "integration_test_api_key_hash");
 
     let pool = match test_pool().await {
         Some(p) => p,
@@ -445,8 +450,8 @@ async fn register_login_me_refresh_revoke_api_keys_and_grpc_validate() {
         .await;
     assert!(revoked_grpc.is_err());
 
-    std::env::remove_var("JWT_SECRET");
-    std::env::remove_var("API_KEY_HASH_SECRET");
+    std::env::remove_var(JWT_SECRET_ENV);
+    std::env::remove_var(API_KEY_HASH_SECRET_ENV);
 }
 
 #[tokio::test]
@@ -474,7 +479,7 @@ async fn register_business_rejects_empty_admin_email() {
 #[tokio::test]
 async fn password_reset_happy_and_failure_paths() {
     let _lock = env_lock();
-    std::env::set_var("JWT_SECRET", "integration_test_jwt_secret");
+    std::env::set_var(JWT_SECRET_ENV, "integration_test_jwt_secret");
 
     let pool = match test_pool().await {
         Some(p) => p,
@@ -546,7 +551,7 @@ async fn password_reset_happy_and_failure_paths() {
     .await;
     assert!(bad_tok.is_err());
 
-    std::env::remove_var("JWT_SECRET");
+    std::env::remove_var(JWT_SECRET_ENV);
 }
 
 #[tokio::test]
@@ -597,7 +602,7 @@ async fn beta_apply_conflict_on_duplicate_email() {
 #[tokio::test]
 async fn http_router_health_and_correlation_header() {
     let _lock = env_lock();
-    std::env::set_var("JWT_SECRET", "integration_test_jwt_secret");
+    std::env::set_var(JWT_SECRET_ENV, "integration_test_jwt_secret");
 
     let pool = match test_pool().await {
         Some(p) => p,
@@ -633,14 +638,14 @@ async fn http_router_health_and_correlation_header() {
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert!(v.get("error").is_some() || v.get("message").is_some());
 
-    std::env::remove_var("JWT_SECRET");
+    std::env::remove_var(JWT_SECRET_ENV);
 }
 
 #[tokio::test]
 async fn internal_service_token_blocks_sensitive_routes_when_configured() {
     let _lock = env_lock();
-    std::env::set_var("INTERNAL_SERVICE_TOKEN_ALLOWLIST", "secret-one,secret-two");
-    std::env::set_var("JWT_SECRET", "integration_test_jwt_secret");
+    std::env::set_var(INTERNAL_SERVICE_TOKEN_ALLOWLIST_ENV, "secret-one,secret-two");
+    std::env::set_var(JWT_SECRET_ENV, "integration_test_jwt_secret");
 
     let pool = match test_pool().await {
         Some(p) => p,
@@ -677,8 +682,8 @@ async fn internal_service_token_blocks_sensitive_routes_when_configured() {
     let ok = svc.ready().await.unwrap().call(ok_req).await.unwrap();
     assert_ne!(ok.status(), StatusCode::FORBIDDEN);
 
-    std::env::remove_var("INTERNAL_SERVICE_TOKEN_ALLOWLIST");
-    std::env::remove_var("JWT_SECRET");
+    std::env::remove_var(INTERNAL_SERVICE_TOKEN_ALLOWLIST_ENV);
+    std::env::remove_var(JWT_SECRET_ENV);
 }
 
 #[tokio::test]
@@ -766,8 +771,8 @@ async fn password_reset_completes_with_seeded_token() {
 #[tokio::test]
 async fn revoke_api_key_unknown_returns_bad_request() {
     let _lock = env_lock();
-    std::env::set_var("JWT_SECRET", "integration_test_jwt_secret");
-    std::env::set_var("API_KEY_HASH_SECRET", "integration_test_api_key_hash");
+    std::env::set_var(JWT_SECRET_ENV, "integration_test_jwt_secret");
+    std::env::set_var(API_KEY_HASH_SECRET_ENV, "integration_test_api_key_hash");
 
     let pool = match test_pool().await {
         Some(p) => p,
@@ -837,15 +842,15 @@ async fn revoke_api_key_unknown_returns_bad_request() {
     .await;
     assert!(matches!(err, Err(AppError::BadRequest(_))));
 
-    std::env::remove_var("JWT_SECRET");
-    std::env::remove_var("API_KEY_HASH_SECRET");
+    std::env::remove_var(JWT_SECRET_ENV);
+    std::env::remove_var(API_KEY_HASH_SECRET_ENV);
 }
 
 #[tokio::test]
 async fn create_api_key_forbidden_for_non_admin_member() {
     let _lock = env_lock();
-    std::env::set_var("JWT_SECRET", "integration_test_jwt_secret");
-    std::env::set_var("API_KEY_HASH_SECRET", "integration_test_api_key_hash");
+    std::env::set_var(JWT_SECRET_ENV, "integration_test_jwt_secret");
+    std::env::set_var(API_KEY_HASH_SECRET_ENV, "integration_test_api_key_hash");
 
     let pool = match test_pool().await {
         Some(p) => p,
@@ -939,8 +944,8 @@ async fn create_api_key_forbidden_for_non_admin_member() {
     .await;
     assert!(matches!(denied, Err(AppError::Forbidden)));
 
-    std::env::remove_var("JWT_SECRET");
-    std::env::remove_var("API_KEY_HASH_SECRET");
+    std::env::remove_var(JWT_SECRET_ENV);
+    std::env::remove_var(API_KEY_HASH_SECRET_ENV);
 }
 
 #[tokio::test]
@@ -965,7 +970,7 @@ async fn password_reset_request_sends_resend_when_configured() {
         })
         .await;
 
-    let database_url = std::env::var("DATABASE_URL")
+    let database_url = std::env::var(DATABASE_URL_ENV)
         .expect("DATABASE_URL must be set when test_pool() succeeds");
     let config = Config {
         database_url,
@@ -1033,7 +1038,7 @@ async fn password_reset_request_logs_when_resend_returns_error() {
         })
         .await;
 
-    let database_url = std::env::var("DATABASE_URL")
+    let database_url = std::env::var(DATABASE_URL_ENV)
         .expect("DATABASE_URL must be set when test_pool() succeeds");
     let config = Config {
         database_url,
@@ -1084,7 +1089,7 @@ async fn password_reset_request_logs_when_resend_returns_error() {
 #[tokio::test]
 async fn login_refresh_revoke_paths_with_failing_audit_grpc() {
     let _lock = env_lock();
-    std::env::set_var("JWT_SECRET", "integration_test_jwt_secret");
+    std::env::set_var(JWT_SECRET_ENV, "integration_test_jwt_secret");
 
     let pool = match test_pool().await {
         Some(p) => p,
@@ -1187,13 +1192,13 @@ async fn login_refresh_revoke_paths_with_failing_audit_grpc() {
     let _ = shutdown_tx.send(());
     let _ = join.await;
 
-    std::env::remove_var("JWT_SECRET");
+    std::env::remove_var(JWT_SECRET_ENV);
 }
 
 #[tokio::test]
 async fn login_falls_back_to_sandbox_when_requested_environment_id_unknown() {
     let _lock = env_lock();
-    std::env::set_var("JWT_SECRET", "integration_test_jwt_secret");
+    std::env::set_var(JWT_SECRET_ENV, "integration_test_jwt_secret");
 
     let pool = match test_pool().await {
         Some(p) => p,
@@ -1239,13 +1244,13 @@ async fn login_falls_back_to_sandbox_when_requested_environment_id_unknown() {
         .expect("selected env");
     assert_eq!(sandbox_type, "sandbox");
 
-    std::env::remove_var("JWT_SECRET");
+    std::env::remove_var(JWT_SECRET_ENV);
 }
 
 #[tokio::test]
 async fn jwt_auth_rejects_environment_not_in_business() {
     let _lock = env_lock();
-    std::env::set_var("JWT_SECRET", "integration_test_jwt_secret");
+    std::env::set_var(JWT_SECRET_ENV, "integration_test_jwt_secret");
 
     let pool = match test_pool().await {
         Some(p) => p,
@@ -1313,14 +1318,14 @@ async fn jwt_auth_rejects_environment_not_in_business() {
         .await
         .expect("valid env still works");
 
-    std::env::remove_var("JWT_SECRET");
+    std::env::remove_var(JWT_SECRET_ENV);
 }
 
 #[tokio::test]
 async fn create_api_key_admin_success_with_failing_audit_grpc() {
     let _lock = env_lock();
-    std::env::set_var("JWT_SECRET", "integration_test_jwt_secret");
-    std::env::set_var("API_KEY_HASH_SECRET", "integration_test_api_key_hash");
+    std::env::set_var(JWT_SECRET_ENV, "integration_test_jwt_secret");
+    std::env::set_var(API_KEY_HASH_SECRET_ENV, "integration_test_api_key_hash");
 
     let pool = match test_pool().await {
         Some(p) => p,
@@ -1398,8 +1403,8 @@ async fn create_api_key_admin_success_with_failing_audit_grpc() {
     let _ = shutdown_tx.send(());
     let _ = join.await;
 
-    std::env::remove_var("JWT_SECRET");
-    std::env::remove_var("API_KEY_HASH_SECRET");
+    std::env::remove_var(JWT_SECRET_ENV);
+    std::env::remove_var(API_KEY_HASH_SECRET_ENV);
 }
 
 #[tokio::test]
