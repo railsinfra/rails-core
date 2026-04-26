@@ -150,10 +150,14 @@ def _bitly_shorten(
         method="POST",
     )
     try:
+        # Validate URL scheme is http or https
+        scheme_url = req.full_url if hasattr(req, 'full_url') else req
+        if not str(scheme_url).lower().startswith(('http://', 'https://')):
+            raise ValueError(f"Unsupported URL scheme: {scheme_url}")
         with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310 — fixed Bitly API URL
             raw = resp.read().decode("utf-8")
         data = json.loads(raw) if raw else {}
-    except (urllib.error.URLError, json.JSONDecodeError, TimeoutError):
+    except (urllib.error.URLError, json.JSONDecodeError, TimeoutError, ValueError):
         return None
     if isinstance(data, dict):
         link = data.get("link")
