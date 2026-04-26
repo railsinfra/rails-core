@@ -41,7 +41,7 @@ class LedgerTransactionTest < ActiveSupport::TestCase
         tx.mark_as_posted!
       end
     end
-    assert logged.any? { |m| m.include?("after_commit error") && m.include?("audit boom") }
+    assert(logged.any? { |m| m.include?("after_commit error") && m.include?("audit boom") })
   end
 
   test "mark_as_posted triggers audit append hook" do
