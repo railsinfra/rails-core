@@ -9,8 +9,8 @@ class LedgerAccount < ApplicationRecord
   validates :account_type, presence: true, inclusion: { in: %w[asset liability equity income expense] }
   validates :currency, presence: true
 
-  has_many :debit_entries, class_name: 'LedgerEntry', foreign_key: 'ledger_account_id'
-  has_many :credit_entries, class_name: 'LedgerEntry', foreign_key: 'ledger_account_id'
+  has_many :debit_entries, class_name: 'LedgerEntry'
+  has_many :credit_entries, class_name: 'LedgerEntry'
   has_one :account_balance, dependent: :destroy
 
   enum account_type: {
