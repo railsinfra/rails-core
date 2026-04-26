@@ -15,7 +15,7 @@ class ApplicationController < ActionController::API
       grpc_status = 'not_ready'
     rescue => e
       # Any other error - log but don't fail health check
-      Rails.logger.debug "Health check gRPC probe failed: #{e.class}: #{e.message}"
+      Rails.logger.debug { "Health check gRPC probe failed: #{e.class}: #{e.message}" }
       grpc_status = 'error'
     end
 
