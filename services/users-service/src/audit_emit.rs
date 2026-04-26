@@ -216,9 +216,11 @@ async fn append_with_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::AppError;
     use crate::grpc::audit_proto::audit_service_server::{AuditService, AuditServiceServer};
     use crate::grpc::GrpcClients;
     use crate::grpc::audit_proto::{AppendAuditEventRequest, AppendAuditEventResponse};
+    use crate::test_support::global_test_lock;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tokio::net::TcpListener;
@@ -239,6 +241,95 @@ mod tests {
             Ok(tonic::Response::new(AppendAuditEventResponse {
                 audit_event_id: Uuid::new_v4().to_string(),
             }))
+        }
+    }
+
+    struct FailingAudit;
+
+    #[tonic::async_trait]
+    impl AuditService for FailingAudit {
+        async fn append_audit_event(
+            &self,
+            _request: tonic::Request<AppendAuditEventRequest>,
+        ) -> Result<tonic::Response<AppendAuditEventResponse>, tonic::Status> {
+            Err(tonic::Status::internal("audit append failed for test"))
+        }
+    }
+
+    #[test]
+    fn environment_from_headers_prefers_x_environment_case_insensitive() {
+        let mut h = HeaderMap::new();
+        assert_eq!(environment_from_headers(&h), "unknown");
+        h.insert("X-Environment", "production".parse().unwrap());
+        assert_eq!(environment_from_headers(&h), "production");
+        let mut h2 = HeaderMap::new();
+        h2.insert("x-environment", "sandbox".parse().unwrap());
+        assert_eq!(environment_from_headers(&h2), "sandbox");
+        let mut h3 = HeaderMap::new();
+        h3.insert("x-environment", "   ".parse().unwrap());
+        assert_eq!(environment_from_headers(&h3), "unknown");
+    }
+
+    #[test]
+    fn correlation_from_headers_uses_header_when_present() {
+        let mut h = HeaderMap::new();
+        let cid = correlation_from_headers(&h);
+        assert_eq!(cid.len(), 36);
+        h.insert("x-correlation-id", "fixed-cid".parse().unwrap());
+        assert_eq!(correlation_from_headers(&h), "fixed-cid");
+    }
+
+    #[test]
+    fn http_status_for_error_matches_status_codes() {
+        assert_eq!(http_status_for_error(&AppError::Unauthorized), 401);
+        assert_eq!(http_status_for_error(&AppError::Forbidden), 403);
+        assert_eq!(http_status_for_error(&AppError::UnrecognizedSource), 403);
+        assert_eq!(http_status_for_error(&AppError::TooManyRequests), 429);
+        assert_eq!(
+            http_status_for_error(&AppError::BadRequest("x".into())),
+            400
+        );
+        assert_eq!(
+            http_status_for_error(&AppError::Conflict("c".into())),
+            409
+        );
+        assert_eq!(http_status_for_error(&AppError::Internal), 500);
+    }
+
+    #[test]
+    fn truncate_reason_caps_at_500_chars_with_ellipsis() {
+        let s: String = (0..520).map(|_| 'a').collect();
+        let out = truncate_reason(&s);
+        assert!(out.ends_with('…'));
+        assert_eq!(out.chars().count(), 501);
+    }
+
+    #[test]
+    fn audit_append_deadline_respects_env_and_bounds() {
+        let _lock = global_test_lock();
+        const AUDIT_APPEND_TIMEOUT_MS_ENV: &str = "AUDIT_APPEND_TIMEOUT_MS";
+        let saved = std::env::var(AUDIT_APPEND_TIMEOUT_MS_ENV).ok();
+        std::env::remove_var(AUDIT_APPEND_TIMEOUT_MS_ENV);
+        assert_eq!(super::audit_append_deadline(), Duration::from_millis(5_000));
+
+        std::env::set_var(AUDIT_APPEND_TIMEOUT_MS_ENV, "2500");
+        assert_eq!(super::audit_append_deadline(), Duration::from_millis(2_500));
+
+        std::env::set_var(AUDIT_APPEND_TIMEOUT_MS_ENV, "0");
+        assert_eq!(super::audit_append_deadline(), Duration::from_millis(5_000));
+
+        std::env::set_var(AUDIT_APPEND_TIMEOUT_MS_ENV, "999999999");
+        assert_eq!(super::audit_append_deadline(), Duration::from_millis(5_000));
+
+        std::env::set_var(AUDIT_APPEND_TIMEOUT_MS_ENV, "not-a-number");
+        assert_eq!(super::audit_append_deadline(), Duration::from_millis(5_000));
+
+        std::env::set_var(AUDIT_APPEND_TIMEOUT_MS_ENV, "120000");
+        assert_eq!(super::audit_append_deadline(), Duration::from_millis(120_000));
+
+        match saved {
+            Some(v) => std::env::set_var(AUDIT_APPEND_TIMEOUT_MS_ENV, v),
+            None => std::env::remove_var(AUDIT_APPEND_TIMEOUT_MS_ENV),
         }
     }
 
@@ -318,5 +409,112 @@ mod tests {
             HashMap::new(),
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn emit_records_grpc_failure_without_panicking() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let incoming = TcpListenerStream::new(listener);
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let server = Server::builder()
+            .add_service(AuditServiceServer::new(FailingAudit))
+            .serve_with_incoming_shutdown(incoming, async {
+                let _ = rx.await;
+            });
+        let j = tokio::spawn(server);
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+
+        let endpoint = format!("http://{addr}");
+        let ch = Endpoint::from_shared(endpoint.clone())
+            .unwrap()
+            .connect_lazy();
+        let client = AuditServiceClient::new(ch);
+        let grpc = GrpcClients::new(None, Some(client));
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-correlation-id", "cid-grpc-fail".parse().unwrap());
+        headers.insert("x-environment", "staging".parse().unwrap());
+        headers.insert(
+            "x-forwarded-for",
+            "203.0.113.1, 10.0.0.1".parse().unwrap(),
+        );
+        headers.insert(axum::http::header::USER_AGENT, "TestUA/1".parse().unwrap());
+        let peer = SocketAddr::from(([10, 0, 0, 2], 443));
+
+        emit_users_mutation(
+            &grpc,
+            &headers,
+            &peer,
+            "POST",
+            "/api/v1/auth/login",
+            "users.auth.login",
+            Uuid::nil(),
+            ActorType::Anonymous,
+            "",
+            vec![],
+            "user",
+            Uuid::nil(),
+            503,
+            Some("rate limited".into()),
+            HashMap::new(),
+        )
+        .await;
+
+        let _ = tx.send(());
+        let _ = j.await;
+    }
+
+    #[tokio::test]
+    async fn emit_success_uses_forwarded_for_and_user_agent() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let incoming = TcpListenerStream::new(listener);
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let svc = CountingAudit {
+            hits: hits.clone(),
+        };
+        let server = Server::builder()
+            .add_service(AuditServiceServer::new(svc))
+            .serve_with_incoming_shutdown(incoming, async {
+                let _ = rx.await;
+            });
+        let j = tokio::spawn(server);
+        tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+
+        let ch = Endpoint::from_shared(format!("http://{addr}"))
+            .unwrap()
+            .connect_lazy();
+        let client = AuditServiceClient::new(ch);
+        let grpc = GrpcClients::new(None, Some(client));
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "198.51.100.9".parse().unwrap());
+        headers.insert(axum::http::header::USER_AGENT, "CovBot/2".parse().unwrap());
+        let peer = SocketAddr::from(([127, 0, 0, 1], 1));
+
+        emit_users_mutation(
+            &grpc,
+            &headers,
+            &peer,
+            "GET",
+            "/api/v1/me",
+            "users.probe",
+            Uuid::nil(),
+            ActorType::User,
+            "user-1",
+            vec!["admin".into()],
+            "user",
+            Uuid::nil(),
+            201,
+            None,
+            HashMap::new(),
+        )
+        .await;
+
+        assert!(hits.load(Ordering::SeqCst) >= 1);
+        let _ = tx.send(());
+        let _ = j.await;
     }
 }

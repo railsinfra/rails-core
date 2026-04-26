@@ -146,4 +146,12 @@ mod tests {
         assert!(GrpcClients::audit_channel("").is_none());
         assert!(GrpcClients::audit_channel("   ").is_none());
     }
+
+    #[tokio::test]
+    async fn init_skips_audit_client_when_audit_url_empty() {
+        let mut cfg = Config::test_stub_with_accounts_grpc("http://127.0.0.1:1".into());
+        cfg.audit_grpc_url = String::new();
+        let clients = init(&cfg).await.expect("init");
+        assert!(clients.audit_client.is_none());
+    }
 }

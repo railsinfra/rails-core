@@ -1,19 +1,27 @@
 //! PostgreSQL-backed integration tests. Set `DATABASE_URL` (e.g. CI or local Postgres).
 
 use axum::body::{to_bytes, Body};
-use axum::extract::{ConnectInfo, FromRequestParts, State};
+use axum::extract::{ConnectInfo, FromRequestParts, Path, State};
 use axum::http::{header, HeaderMap, Request, StatusCode};
 use axum::Json;
 use chrono::Utc;
+use httpmock::prelude::*;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
+use tokio_stream::wrappers::TcpListenerStream;
+use tonic::transport::{Endpoint, Server};
 use tower::{Service, ServiceExt};
 use uuid::Uuid;
 
 use users_service::auth::{ApiKeyOnlyContext, AuthContext};
+use users_service::config::Config;
 use users_service::db;
+use users_service::email::EmailService;
 use users_service::error::AppError;
+use users_service::grpc::audit_proto::audit_service_client::AuditServiceClient;
+use users_service::grpc::audit_proto::audit_service_server::{AuditService, AuditServiceServer};
+use users_service::grpc::audit_proto::{AppendAuditEventRequest, AppendAuditEventResponse};
 use users_service::grpc::GrpcClients;
 use users_service::grpc_server::proto::users_service_server::UsersService;
 use users_service::grpc_server::proto::ValidateApiKeyRequest;
@@ -25,7 +33,7 @@ use users_service::routes::auth::{
     login, refresh_token, revoke_token, LoginRequest, RefreshTokenRequest, RevokeTokenRequest,
 };
 use users_service::routes::beta::{apply_for_beta, BetaApplicationRequest};
-use users_service::routes::business::{register_business, RegisterBusinessRequest};
+use users_service::routes::business::{register_business, RegisterBusinessRequest, RegisterBusinessResponse};
 use users_service::routes::password_reset::{
     request_password_reset, reset_password, RequestPasswordResetRequest, ResetPasswordRequest,
 };
@@ -52,6 +60,41 @@ async fn test_pool() -> Option<sqlx::PgPool> {
 
 fn grpc_none() -> GrpcClients {
     GrpcClients::none()
+}
+
+struct FailingAuditGrpc;
+
+#[tonic::async_trait]
+impl AuditService for FailingAuditGrpc {
+    async fn append_audit_event(
+        &self,
+        _request: tonic::Request<AppendAuditEventRequest>,
+    ) -> Result<tonic::Response<AppendAuditEventResponse>, tonic::Status> {
+        Err(tonic::Status::unavailable("audit unavailable for coverage test"))
+    }
+}
+
+async fn grpc_clients_with_failing_audit() -> (
+    GrpcClients,
+    tokio::task::JoinHandle<Result<(), tonic::transport::Error>>,
+    tokio::sync::oneshot::Sender<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let incoming = TcpListenerStream::new(listener);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let serve = Server::builder()
+        .add_service(AuditServiceServer::new(FailingAuditGrpc))
+        .serve_with_incoming_shutdown(incoming, async {
+            let _ = shutdown_rx.await;
+        });
+    let join = tokio::spawn(serve);
+    tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+    let ch = Endpoint::from_shared(format!("http://{addr}"))
+        .unwrap()
+        .connect_lazy();
+    let client = AuditServiceClient::new(ch);
+    (GrpcClients::new(None, Some(client)), join, shutdown_tx)
 }
 
 fn hdr_empty() -> HeaderMap {
@@ -718,4 +761,649 @@ async fn password_reset_completes_with_seeded_token() {
     .await
     .expect("login with new password");
     assert!(!login_ok.0.access_token.is_empty());
+}
+
+#[tokio::test]
+async fn revoke_api_key_unknown_returns_bad_request() {
+    let _lock = env_lock();
+    std::env::set_var("JWT_SECRET", "integration_test_jwt_secret");
+    std::env::set_var("API_KEY_HASH_SECRET", "integration_test_api_key_hash");
+
+    let pool = match test_pool().await {
+        Some(p) => p,
+        None => {
+            eprintln!("DATABASE_URL not set; skipping revoke_api_key_unknown_returns_bad_request.");
+            return;
+        }
+    };
+
+    let email = format!("revunk+{}@example.com", Uuid::new_v4());
+    let state = AppState {
+        db: pool.clone(),
+        grpc: grpc_none(),
+        email: None,
+    };
+    let reg = register_business(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        Json(register_payload(&email)),
+    )
+    .await
+    .expect("register");
+    let RegisterBusinessResponse {
+        environments,
+        ..
+    } = reg.0;
+    let sandbox_id = environments
+        .iter()
+        .find(|e| e.r#type == "sandbox")
+        .expect("sandbox")
+        .id;
+
+    let login_sandbox = login(
+        State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
+        Json(LoginRequest {
+            email: email.clone(),
+            password: "password123!".into(),
+            environment_id: None,
+        }),
+    )
+    .await
+    .expect("login");
+    let access = login_sandbox.0.access_token.clone();
+
+    let mut parts = empty_request_parts();
+    parts.headers.insert(
+        header::AUTHORIZATION,
+        format!("Bearer {}", access).parse().unwrap(),
+    );
+    parts
+        .headers
+        .insert("x-environment-id", sandbox_id.to_string().parse().unwrap());
+    let ctx = AuthContext::from_request_parts(&mut parts, &state)
+        .await
+        .expect("ctx");
+
+    let err = revoke_api_key(
+        State(state),
+        hdr_empty(),
+        test_connect_info(),
+        ctx,
+        Path(Uuid::new_v4()),
+    )
+    .await;
+    assert!(matches!(err, Err(AppError::BadRequest(_))));
+
+    std::env::remove_var("JWT_SECRET");
+    std::env::remove_var("API_KEY_HASH_SECRET");
+}
+
+#[tokio::test]
+async fn create_api_key_forbidden_for_non_admin_member() {
+    let _lock = env_lock();
+    std::env::set_var("JWT_SECRET", "integration_test_jwt_secret");
+    std::env::set_var("API_KEY_HASH_SECRET", "integration_test_api_key_hash");
+
+    let pool = match test_pool().await {
+        Some(p) => p,
+        None => {
+            eprintln!("DATABASE_URL not set; skipping create_api_key_forbidden_for_non_admin_member.");
+            return;
+        }
+    };
+
+    let email = format!("memberkey+{}@example.com", Uuid::new_v4());
+    let state = AppState {
+        db: pool.clone(),
+        grpc: grpc_none(),
+        email: None,
+    };
+    let reg = register_business(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        Json(register_payload(&email)),
+    )
+    .await
+    .expect("register");
+    let RegisterBusinessResponse {
+        business_id,
+        environments,
+        ..
+    } = reg.0;
+    let sandbox_id = environments
+        .iter()
+        .find(|e| e.r#type == "sandbox")
+        .expect("sandbox")
+        .id;
+
+    let email_norm = email.trim().to_lowercase();
+    let admin_hash: String = sqlx::query_scalar(
+        "SELECT password_hash FROM users WHERE email = $1 AND status = 'active' LIMIT 1",
+    )
+    .bind(&email_norm)
+    .fetch_one(&pool)
+    .await
+    .expect("admin hash");
+
+    let member_id = Uuid::new_v4();
+    let member_email = format!("memberuser+{}@example.com", Uuid::new_v4());
+    sqlx::query(
+        "INSERT INTO users (id, business_id, environment_id, first_name, last_name, email, password_hash, role, status, created_at, updated_at) VALUES ($1, $2, $3, 'Mem', 'Ber', $4, $5, 'member', 'active', NOW(), NOW())",
+    )
+    .bind(member_id)
+    .bind(business_id)
+    .bind(sandbox_id)
+    .bind(&member_email)
+    .bind(&admin_hash)
+    .execute(&pool)
+    .await
+    .expect("insert member");
+
+    let member_login = login(
+        State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
+        Json(LoginRequest {
+            email: member_email,
+            password: "password123!".into(),
+            environment_id: None,
+        }),
+    )
+    .await
+    .expect("member login");
+    let mut parts = empty_request_parts();
+    parts.headers.insert(
+        header::AUTHORIZATION,
+        format!("Bearer {}", member_login.0.access_token).parse().unwrap(),
+    );
+    parts
+        .headers
+        .insert("x-environment-id", sandbox_id.to_string().parse().unwrap());
+    let ctx_member = AuthContext::from_request_parts(&mut parts, &state)
+        .await
+        .expect("member ctx");
+
+    let denied = create_api_key(
+        State(state),
+        hdr_empty(),
+        test_connect_info(),
+        ctx_member,
+        Json(CreateApiKeyRequest {
+            environment_id: None,
+        }),
+    )
+    .await;
+    assert!(matches!(denied, Err(AppError::Forbidden)));
+
+    std::env::remove_var("JWT_SECRET");
+    std::env::remove_var("API_KEY_HASH_SECRET");
+}
+
+#[tokio::test]
+async fn password_reset_request_sends_resend_when_configured() {
+    let _lock = env_lock();
+
+    let pool = match test_pool().await {
+        Some(p) => p,
+        None => {
+            eprintln!("DATABASE_URL not set; skipping password_reset_request_sends_resend_when_configured.");
+            return;
+        }
+    };
+
+    let server = MockServer::start_async().await;
+    let emails_mock = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/emails");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(r#"{"id":"email-pr"}"#);
+        })
+        .await;
+
+    let database_url = std::env::var("DATABASE_URL")
+        .expect("DATABASE_URL must be set when test_pool() succeeds");
+    let config = Config {
+        database_url,
+        server_addr: "127.0.0.1:0".to_string(),
+        grpc_port: 50051,
+        accounts_grpc_url: "http://localhost:50052".to_string(),
+        audit_grpc_url: "http://127.0.0.1:1".to_string(),
+        sentry_dsn: None,
+        environment: "test".to_string(),
+        resend_api_key: Some("test-key-pr".to_string()),
+        resend_from_email: "noreply@rails.co.za".to_string(),
+        resend_from_name: "Rails".to_string(),
+        resend_base_url: server.base_url(),
+        resend_beta_notification_email: "beta@rails.co.za".to_string(),
+        frontend_base_url: "http://localhost:5173".to_string(),
+    };
+    let email_service = EmailService::new(&config);
+
+    let email = format!("prsend+{}@example.com", Uuid::new_v4());
+    let state = AppState {
+        db: pool.clone(),
+        grpc: grpc_none(),
+        email: Some(email_service),
+    };
+    let _ = register_business(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        Json(register_payload(&email)),
+    )
+    .await
+    .expect("register");
+
+    let _ = request_password_reset(
+        State(state),
+        hdr_empty(),
+        test_connect_info(),
+        Json(RequestPasswordResetRequest {
+            email: email.clone(),
+        }),
+    )
+    .await
+    .expect("request reset");
+
+    emails_mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn login_refresh_revoke_paths_with_failing_audit_grpc() {
+    let _lock = env_lock();
+    std::env::set_var("JWT_SECRET", "integration_test_jwt_secret");
+
+    let pool = match test_pool().await {
+        Some(p) => p,
+        None => {
+            eprintln!("DATABASE_URL not set; skipping login_refresh_revoke_paths_with_failing_audit_grpc.");
+            return;
+        }
+    };
+
+    let (grpc, join, shutdown_tx) = grpc_clients_with_failing_audit().await;
+
+    let email = format!("failaudit+{}@example.com", Uuid::new_v4());
+    let state = AppState {
+        db: pool.clone(),
+        grpc,
+        email: None,
+    };
+
+    let _ = register_business(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        Json(register_payload(&email)),
+    )
+    .await
+    .expect("register");
+
+    let ok = login(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        Json(LoginRequest {
+            email: email.clone(),
+            password: "password123!".into(),
+            environment_id: None,
+        }),
+    )
+    .await
+    .expect("login ok despite audit failure");
+    assert!(!ok.0.access_token.is_empty());
+
+    let bad_login = login(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        Json(LoginRequest {
+            email: email.clone(),
+            password: "wrong-password".into(),
+            environment_id: None,
+        }),
+    )
+    .await;
+    assert!(bad_login.is_err());
+
+    let _ = request_password_reset(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        Json(RequestPasswordResetRequest {
+            email: "ghost-user-not-real@example.com".into(),
+        }),
+    )
+    .await
+    .expect("reset request for missing user");
+
+    let refreshed = refresh_token(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        Json(RefreshTokenRequest {
+            refresh_token: ok.0.refresh_token.clone(),
+        }),
+    )
+    .await
+    .expect("refresh ok");
+    assert!(!refreshed.0.access_token.is_empty());
+
+    let bad_revoke = revoke_token(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        Json(RevokeTokenRequest {
+            refresh_token: "not-a-valid-refresh-token".into(),
+        }),
+    )
+    .await;
+    assert!(bad_revoke.is_err());
+
+    let _ = revoke_token(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        Json(RevokeTokenRequest {
+            refresh_token: refreshed.0.refresh_token.clone(),
+        }),
+    )
+    .await
+    .expect("revoke ok");
+
+    let _ = shutdown_tx.send(());
+    let _ = join.await;
+
+    std::env::remove_var("JWT_SECRET");
+}
+
+#[tokio::test]
+async fn login_falls_back_to_sandbox_when_requested_environment_id_unknown() {
+    let _lock = env_lock();
+    std::env::set_var("JWT_SECRET", "integration_test_jwt_secret");
+
+    let pool = match test_pool().await {
+        Some(p) => p,
+        None => {
+            eprintln!("DATABASE_URL not set; skipping login_falls_back_to_sandbox_when_requested_environment_id_unknown.");
+            return;
+        }
+    };
+
+    let email = format!("envfallback+{}@example.com", Uuid::new_v4());
+    let state = AppState {
+        db: pool,
+        grpc: grpc_none(),
+        email: None,
+    };
+    let _ = register_business(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        Json(register_payload(&email)),
+    )
+    .await
+    .expect("register");
+
+    let ok = login(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        Json(LoginRequest {
+            email: email.clone(),
+            password: "password123!".into(),
+            environment_id: Some(Uuid::new_v4()),
+        }),
+    )
+    .await
+    .expect("login with bogus env id still succeeds");
+    let sandbox_type = ok
+        .0
+        .environments
+        .iter()
+        .find(|e| e.id == ok.0.selected_environment_id)
+        .map(|e| e.r#type.as_str())
+        .expect("selected env");
+    assert_eq!(sandbox_type, "sandbox");
+
+    std::env::remove_var("JWT_SECRET");
+}
+
+#[tokio::test]
+async fn jwt_auth_rejects_environment_not_in_business() {
+    let _lock = env_lock();
+    std::env::set_var("JWT_SECRET", "integration_test_jwt_secret");
+
+    let pool = match test_pool().await {
+        Some(p) => p,
+        None => {
+            eprintln!("DATABASE_URL not set; skipping jwt_auth_rejects_environment_not_in_business.");
+            return;
+        }
+    };
+
+    let email = format!("jwtbadenv+{}@example.com", Uuid::new_v4());
+    let state = AppState {
+        db: pool,
+        grpc: grpc_none(),
+        email: None,
+    };
+    let reg = register_business(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        Json(register_payload(&email)),
+    )
+    .await
+    .expect("register");
+    let sandbox_id = reg
+        .0
+        .environments
+        .iter()
+        .find(|e| e.r#type == "sandbox")
+        .expect("sandbox")
+        .id;
+
+    let login_ok = login(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        Json(LoginRequest {
+            email,
+            password: "password123!".into(),
+            environment_id: None,
+        }),
+    )
+    .await
+    .expect("login");
+
+    let mut parts = empty_request_parts();
+    parts.headers.insert(
+        header::AUTHORIZATION,
+        format!("Bearer {}", login_ok.0.access_token).parse().unwrap(),
+    );
+    parts
+        .headers
+        .insert("x-environment-id", Uuid::new_v4().to_string().parse().unwrap());
+    let err = AuthContext::from_request_parts(&mut parts, &state).await;
+    assert!(matches!(err, Err(AppError::Forbidden)));
+
+    let mut parts_ok = empty_request_parts();
+    parts_ok.headers.insert(
+        header::AUTHORIZATION,
+        format!("Bearer {}", login_ok.0.access_token).parse().unwrap(),
+    );
+    parts_ok
+        .headers
+        .insert("x-environment-id", sandbox_id.to_string().parse().unwrap());
+    AuthContext::from_request_parts(&mut parts_ok, &state)
+        .await
+        .expect("valid env still works");
+
+    std::env::remove_var("JWT_SECRET");
+}
+
+#[tokio::test]
+async fn create_api_key_admin_success_with_failing_audit_grpc() {
+    let _lock = env_lock();
+    std::env::set_var("JWT_SECRET", "integration_test_jwt_secret");
+    std::env::set_var("API_KEY_HASH_SECRET", "integration_test_api_key_hash");
+
+    let pool = match test_pool().await {
+        Some(p) => p,
+        None => {
+            eprintln!("DATABASE_URL not set; skipping create_api_key_admin_success_with_failing_audit_grpc.");
+            return;
+        }
+    };
+
+    let (grpc, join, shutdown_tx) = grpc_clients_with_failing_audit().await;
+
+    let email = format!("apikeyok+{}@example.com", Uuid::new_v4());
+    let state = AppState {
+        db: pool.clone(),
+        grpc,
+        email: None,
+    };
+
+    let reg = register_business(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        Json(register_payload(&email)),
+    )
+    .await
+    .expect("register");
+    let sandbox_id = reg
+        .0
+        .environments
+        .iter()
+        .find(|e| e.r#type == "sandbox")
+        .expect("sandbox")
+        .id;
+
+    let login_sandbox = login(
+        State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
+        Json(LoginRequest {
+            email: email.clone(),
+            password: "password123!".into(),
+            environment_id: None,
+        }),
+    )
+    .await
+    .expect("login");
+    let access = login_sandbox.0.access_token.clone();
+
+    let mut parts = empty_request_parts();
+    parts.headers.insert(
+        header::AUTHORIZATION,
+        format!("Bearer {}", access).parse().unwrap(),
+    );
+    parts
+        .headers
+        .insert("x-environment-id", sandbox_id.to_string().parse().unwrap());
+    let ctx = AuthContext::from_request_parts(&mut parts, &state)
+        .await
+        .expect("ctx");
+
+    let key_resp = create_api_key(
+        State(state),
+        HeaderMap::new(),
+        test_connect_info(),
+        ctx,
+        Json(CreateApiKeyRequest {
+            environment_id: None,
+        }),
+    )
+    .await
+    .expect("create api key");
+    assert_eq!(key_resp.0.status, "active");
+    assert!(!key_resp.0.key.is_empty());
+
+    let _ = shutdown_tx.send(());
+    let _ = join.await;
+
+    std::env::remove_var("JWT_SECRET");
+    std::env::remove_var("API_KEY_HASH_SECRET");
+}
+
+#[tokio::test]
+async fn reset_password_success_with_failing_audit_grpc() {
+    let _lock = env_lock();
+
+    let pool = match test_pool().await {
+        Some(p) => p,
+        None => {
+            eprintln!("DATABASE_URL not set; skipping reset_password_success_with_failing_audit_grpc.");
+            return;
+        }
+    };
+
+    let (grpc, join, shutdown_tx) = grpc_clients_with_failing_audit().await;
+
+    let email = format!("seedfail+{}@example.com", Uuid::new_v4());
+    let state = AppState {
+        db: pool.clone(),
+        grpc,
+        email: None,
+    };
+    let _ = register_business(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        Json(register_payload(&email)),
+    )
+    .await
+    .expect("register");
+
+    let email_norm = email.trim().to_lowercase();
+    let user_id: Uuid = sqlx::query_scalar(
+        "SELECT id FROM users WHERE email = $1 AND status = 'active' LIMIT 1",
+    )
+    .bind(&email_norm)
+    .fetch_one(&pool)
+    .await
+    .expect("user id");
+
+    let raw_token = "integration-reset-token-32chars!!";
+    let mut hasher = Sha256::new();
+    hasher.update(raw_token.as_bytes());
+    let token_hash = format!("{:x}", hasher.finalize());
+    let token_id = Uuid::new_v4();
+    let expires_at = Utc::now() + chrono::Duration::hours(1);
+    let now = Utc::now();
+    sqlx::query(
+        "INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, created_at) VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(token_id)
+    .bind(user_id)
+    .bind(&token_hash)
+    .bind(expires_at)
+    .bind(now)
+    .execute(&pool)
+    .await
+    .expect("insert token");
+
+    let done = reset_password(
+        State(state),
+        hdr_empty(),
+        test_connect_info(),
+        Json(ResetPasswordRequest {
+            token: raw_token.into(),
+            new_password: "newpassword1!".into(),
+        }),
+    )
+    .await
+    .expect("reset password");
+    assert!(done.0.message.to_lowercase().contains("success"));
+
+    let _ = shutdown_tx.send(());
+    let _ = join.await;
 }

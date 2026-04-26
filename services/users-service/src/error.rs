@@ -77,6 +77,20 @@ mod tests {
     use axum::response::IntoResponse;
 
     #[test]
+    fn status_code_matches_http_mapping() {
+        assert_eq!(AppError::Unauthorized.status_code(), 401);
+        assert_eq!(AppError::Forbidden.status_code(), 403);
+        assert_eq!(AppError::UnrecognizedSource.status_code(), 403);
+        assert_eq!(AppError::TooManyRequests.status_code(), 429);
+        assert_eq!(
+            AppError::BadRequest("bad".into()).status_code(),
+            400
+        );
+        assert_eq!(AppError::Conflict("dup".into()).status_code(), 409);
+        assert_eq!(AppError::Internal.status_code(), 500);
+    }
+
+    #[test]
     fn into_response_status_codes() {
         let cases: Vec<(AppError, StatusCode)> = vec![
             (AppError::Unauthorized, StatusCode::UNAUTHORIZED),
