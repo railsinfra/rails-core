@@ -162,9 +162,10 @@ mod tests {
     }
 
     #[test]
+    static USERS_TRUSTED_PROXY_IPS: &str = "USERS_TRUSTED_PROXY_IPS";
     fn extract_client_key_trusted_proxy_falls_back_to_x_real_ip() {
         let _l = global_test_lock();
-        std::env::set_var("USERS_TRUSTED_PROXY_IPS", "127.0.0.1");
+        std::env::set_var(USERS_TRUSTED_PROXY_IPS, "127.0.0.1");
         let mut req = Request::builder()
             .uri("/api/v1/auth/login")
             .header("x-real-ip", "198.51.100.33")
@@ -182,7 +183,7 @@ mod tests {
     #[test]
     fn extract_client_key_forwarded_for_skips_empty_segments() {
         let _l = global_test_lock();
-        std::env::set_var("USERS_TRUSTED_PROXY_IPS", "127.0.0.1");
+        std::env::set_var(USERS_TRUSTED_PROXY_IPS, "127.0.0.1");
         let mut req = Request::builder()
             .uri("/api/v1/auth/login")
             .header("x-forwarded-for", " , 203.0.113.10 , 127.0.0.1 ")
@@ -192,7 +193,7 @@ mod tests {
             std::net::SocketAddr::from(([127, 0, 0, 1], 8080)),
         ));
         assert_eq!(
-            extract_client_key(&req, "USERS_TRUSTED_PROXY_IPS"),
+            extract_client_key(&req, USERS_TRUSTED_PROXY_IPS),
             "203.0.113.10"
         );
     }
@@ -200,7 +201,7 @@ mod tests {
     #[test]
     fn extract_client_key_real_ip_ignores_invalid_ip_string() {
         let _l = global_test_lock();
-        std::env::remove_var("USERS_TRUSTED_PROXY_IPS");
+        std::env::remove_var(USERS_TRUSTED_PROXY_IPS);
         let req = Request::builder()
             .uri("/api/v1/auth/login")
             .header("x-real-ip", "not-an-ip")
@@ -210,30 +211,34 @@ mod tests {
     }
 
     #[test]
+    static USERS_TRUSTED_PROXY_IPS: &str = "USERS_TRUSTED_PROXY_IPS";
+
     fn extract_client_key_falls_back_to_x_real_ip_without_connect_info() {
         let _l = global_test_lock();
-        std::env::remove_var("USERS_TRUSTED_PROXY_IPS");
+        std::env::remove_var(USERS_TRUSTED_PROXY_IPS);
         let req = Request::builder()
             .uri("/api/v1/auth/login")
             .header("x-real-ip", "198.51.100.22")
             .body(Body::empty())
             .unwrap();
         assert_eq!(
-            extract_client_key(&req, "USERS_TRUSTED_PROXY_IPS"),
+            extract_client_key(&req, USERS_TRUSTED_PROXY_IPS),
             "198.51.100.22"
         );
     }
 
     #[test]
+    static USERS_TRUSTED_PROXY_IPS: &str = "USERS_TRUSTED_PROXY_IPS";
+
     fn extract_client_key_returns_unknown_when_no_ip_hints() {
         let _l = global_test_lock();
-        std::env::remove_var("USERS_TRUSTED_PROXY_IPS");
+        std::env::remove_var(USERS_TRUSTED_PROXY_IPS);
         let req = Request::builder()
             .uri("/api/v1/auth/login")
             .body(Body::empty())
             .unwrap();
         assert_eq!(
-            extract_client_key(&req, "USERS_TRUSTED_PROXY_IPS"),
+            extract_client_key(&req, USERS_TRUSTED_PROXY_IPS),
             "unknown"
         );
     }

@@ -227,22 +227,26 @@ mod tests {
     }
 
     #[test]
+    static ACCOUNTS_TRUSTED_PROXY_IPS: &str = "ACCOUNTS_TRUSTED_PROXY_IPS";
+
     fn extract_client_key_uses_peer_ip_when_untrusted() {
         let _lock = test_env_lock();
-        std::env::remove_var("ACCOUNTS_TRUSTED_PROXY_IPS");
+        std::env::remove_var(ACCOUNTS_TRUSTED_PROXY_IPS);
         let mut req = Request::builder()
             .uri("/api/v1/accounts/1/deposit")
             .header("x-forwarded-for", "203.0.113.10")
             .body(Body::empty())
             .unwrap();
         req.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
-        assert_eq!(extract_client_key(&req, "ACCOUNTS_TRUSTED_PROXY_IPS"), "127.0.0.1");
+        assert_eq!(extract_client_key(&req, ACCOUNTS_TRUSTED_PROXY_IPS), "127.0.0.1");
     }
 
     #[test]
+    static ACCOUNTS_TRUSTED_PROXY_IPS: &str = "ACCOUNTS_TRUSTED_PROXY_IPS";
+
     fn extract_client_key_uses_forwarded_ip_when_trusted() {
         let _lock = test_env_lock();
-        std::env::set_var("ACCOUNTS_TRUSTED_PROXY_IPS", "127.0.0.1");
+        std::env::set_var(ACCOUNTS_TRUSTED_PROXY_IPS, "127.0.0.1");
         let mut req = Request::builder()
             .uri("/api/v1/accounts/1/deposit")
             .header("x-forwarded-for", "203.0.113.10, 127.0.0.1")
@@ -253,15 +257,17 @@ mod tests {
     }
 
     #[test]
+    static ACCOUNTS_TRUSTED_PROXY_IPS: &str = "ACCOUNTS_TRUSTED_PROXY_IPS";
+
     fn extract_client_key_ignores_forwarded_ip_when_last_hop_untrusted() {
         let _lock = test_env_lock();
-        std::env::set_var("ACCOUNTS_TRUSTED_PROXY_IPS", "127.0.0.1");
+        std::env::set_var(ACCOUNTS_TRUSTED_PROXY_IPS, "127.0.0.1");
         let mut req = Request::builder()
             .uri("/api/v1/accounts/1/deposit")
             .header("x-forwarded-for", "203.0.113.10, 198.51.100.5")
             .body(Body::empty())
             .unwrap();
         req.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
-        assert_eq!(extract_client_key(&req, "ACCOUNTS_TRUSTED_PROXY_IPS"), "127.0.0.1");
+        assert_eq!(extract_client_key(&req, ACCOUNTS_TRUSTED_PROXY_IPS), "127.0.0.1");
     }
 }
