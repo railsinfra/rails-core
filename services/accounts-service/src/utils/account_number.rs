@@ -3,7 +3,7 @@ use rand::Rng;
 use sqlx::PgPool;
 
 pub(crate) fn clamp_account_number_length(length: usize) -> usize {
-    length.max(10).min(16)
+    length.clamp(10, 16)
 }
 
 /// Build a random numeric account number string of total digit count `length` (including Luhn digit).
