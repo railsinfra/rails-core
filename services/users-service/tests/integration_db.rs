@@ -1014,6 +1014,74 @@ async fn password_reset_request_sends_resend_when_configured() {
 }
 
 #[tokio::test]
+async fn password_reset_request_logs_when_resend_returns_error() {
+    let _lock = env_lock();
+
+    let pool = match test_pool().await {
+        Some(p) => p,
+        None => {
+            eprintln!("DATABASE_URL not set; skipping password_reset_request_logs_when_resend_returns_error.");
+            return;
+        }
+    };
+
+    let server = MockServer::start_async().await;
+    let emails_mock = server
+        .mock_async(|when, then| {
+            when.method(POST).path("/emails");
+            then.status(502).body("bad gateway");
+        })
+        .await;
+
+    let database_url = std::env::var("DATABASE_URL")
+        .expect("DATABASE_URL must be set when test_pool() succeeds");
+    let config = Config {
+        database_url,
+        server_addr: "127.0.0.1:0".to_string(),
+        grpc_port: 50051,
+        accounts_grpc_url: "http://localhost:50052".to_string(),
+        audit_grpc_url: "http://127.0.0.1:1".to_string(),
+        sentry_dsn: None,
+        environment: "test".to_string(),
+        resend_api_key: Some("test-key-pr-err".to_string()),
+        resend_from_email: "noreply@rails.co.za".to_string(),
+        resend_from_name: "Rails".to_string(),
+        resend_base_url: server.base_url(),
+        resend_beta_notification_email: "beta@rails.co.za".to_string(),
+        frontend_base_url: "http://localhost:5173".to_string(),
+    };
+    let email_service = EmailService::new(&config);
+
+    let email = format!("prerr+{}@example.com", Uuid::new_v4());
+    let state = AppState {
+        db: pool.clone(),
+        grpc: grpc_none(),
+        email: Some(email_service),
+    };
+    let _ = register_business(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        Json(register_payload(&email)),
+    )
+    .await
+    .expect("register");
+
+    let _ = request_password_reset(
+        State(state),
+        hdr_empty(),
+        test_connect_info(),
+        Json(RequestPasswordResetRequest {
+            email: email.clone(),
+        }),
+    )
+    .await
+    .expect("request still returns success when email fails");
+
+    emails_mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn login_refresh_revoke_paths_with_failing_audit_grpc() {
     let _lock = env_lock();
     std::env::set_var("JWT_SECRET", "integration_test_jwt_secret");
