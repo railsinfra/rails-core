@@ -23,7 +23,7 @@ class AuditAppend
     target = ENV.fetch('AUDIT_GRPC_URL', '').strip
     return if target.empty?
 
-    require Rails.root.join('lib/grpc/audit/v1/audit_services_pb').to_s
+    require Rails.root.join('lib', 'grpc', 'audit', 'v1', 'audit_services_pb').to_s
 
     correlation = ledger_transaction.external_transaction_id.to_s
 
