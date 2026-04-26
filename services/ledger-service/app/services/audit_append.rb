@@ -6,6 +6,11 @@ class AuditAppend
   TXN_NAME = 'ledger.audit.emit'
   TXN_OP = 'audit.emit'
 
+  # Optional `proc { |target, timeout_sec| stub }` for tests; production always uses the real gRPC stub.
+  class << self
+    attr_accessor :audit_stub_factory
+  end
+
   def self.append_timeout_sec
     ms = ENV.fetch('AUDIT_APPEND_TIMEOUT_MS', '5000').to_s.to_i
     ms = 5000 if ms <= 0
@@ -52,11 +57,15 @@ class AuditAppend
 
     req = Rails::Core::Audit::V1::AppendAuditEventRequest.new(event: event)
     timeout_sec = append_timeout_sec
-    stub = Rails::Core::Audit::V1::AuditService::Stub.new(
-      target,
-      :this_channel_is_insecure,
-      timeout: timeout_sec
-    )
+    stub = if audit_stub_factory
+             audit_stub_factory.call(target, timeout_sec)
+           else
+             Rails::Core::Audit::V1::AuditService::Stub.new(
+               target,
+               :this_channel_is_insecure,
+               timeout: timeout_sec
+             )
+           end
 
     finish_txn = start_sentry_transaction
     deadline = Time.current + timeout_sec

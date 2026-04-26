@@ -27,6 +27,23 @@ class LedgerTransactionTest < ActiveSupport::TestCase
     assert_nil tx.failure_reason
   end
 
+  test "after_commit logs when audit append raises" do
+    logged = []
+    with_stub(Rails.logger, :error, proc { |*args| logged << args.join }) do
+      with_stub(AuditAppend, :emit_ledger_transaction_posted, proc { |_| raise StandardError, "audit boom" }) do
+        tx = LedgerTransaction.create!(
+          organization_id: SecureRandom.uuid,
+          environment: "sandbox",
+          external_transaction_id: SecureRandom.uuid,
+          status: "pending",
+          idempotency_key: SecureRandom.uuid
+        )
+        tx.mark_as_posted!
+      end
+    end
+    assert logged.any? { |m| m.include?("after_commit error") && m.include?("audit boom") }
+  end
+
   test "mark_as_posted triggers audit append hook" do
     calls = []
     meta = AuditAppend.singleton_class

@@ -115,4 +115,16 @@ class ApiLedgerEntriesTest < ActionDispatch::IntegrationTest
     assert_response :unauthorized
     assert_match(/Invalid token/i, JSON.parse(response.body)["error"])
   end
+
+  test "entries index rejects jwt missing business_id" do
+    token = JWT.encode(
+      { "exp" => Time.now.to_i + 3600 },
+      ENV.fetch("JWT_SECRET", "dev_secret"),
+      "HS256"
+    )
+    get "/api/v1/ledger/entries",
+        headers: { "Authorization" => "Bearer #{token}", "X-Environment" => "sandbox" }
+    assert_response :unauthorized
+    assert_match(/missing business_id/i, JSON.parse(response.body)["error"])
+  end
 end
