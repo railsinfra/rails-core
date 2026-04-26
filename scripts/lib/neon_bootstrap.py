@@ -95,17 +95,21 @@ def urls_configured(env: dict[str, str]) -> bool:
 
 def _bitly_fetch_default_group_guid(access_token: str) -> str | None:
     """Resolve a Bitly group_guid via GET /v4/groups (required by many shorten calls)."""
-    req = urllib.request.Request(
-        "https://api-ssl.bitly.com/v4/groups",
-        headers={"Authorization": f"Bearer {access_token}"},
-        method="GET",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310 — fixed Bitly API URL
-            raw = resp.read().decode("utf-8")
-        data = json.loads(raw) if raw else {}
-    except (urllib.error.URLError, json.JSONDecodeError, TimeoutError):
-        return None
+    url = "https://api-ssl.bitly.com/v4/groups"
+    if url.lower().startswith(("http://", "https://")):
+        req = urllib.request.Request(
+            url,
+            headers={"Authorization": f"Bearer {access_token}"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310 — fixed Bitly API URL
+                raw = resp.read().decode("utf-8")
+            data = json.loads(raw) if raw else {}
+        except (urllib.error.URLError, json.JSONDecodeError, TimeoutError):
+            return None
+    else:
+        raise ValueError(f"Invalid URL scheme for Bitly API: {url}")
     groups = data.get("groups") if isinstance(data, dict) else None
     if not isinstance(groups, list) or not groups:
         return None
@@ -160,6 +164,9 @@ def _bitly_shorten(
 
 def _isgd_shorten(url: str) -> str | None:
     """Shorten via is.gd public API (no API key). See https://is.gd/developers.php — do not use for secrets."""
+    if not url.lower().startswith(("http://", "https://")):
+        raise ValueError(f"Unsupported URL scheme: {url}")
+
     q = urllib.parse.urlencode({"format": "simple", "url": url})
     api = f"https://is.gd/create.php?{q}"
     req = urllib.request.Request(
@@ -182,7 +189,7 @@ def _isgd_shorten(url: str) -> str | None:
     if body.startswith("https://"):
         return body
     if body.startswith("http://is.gd/") or body.startswith("http://v.gd/"):
-        return "https://" + body[len("http://") :]
+        return "https://" + body[len("http://"):]
     return None
 
 
@@ -245,6 +252,9 @@ def _request_json(
     url = NEON_API + path
     if query:
         url += "?" + urllib.parse.urlencode(query)
+    # Validate URL scheme
+    if not url.lower().startswith(("http://", "https://")):
+        raise ValueError(f"Invalid URL scheme: {url}")
     data_bytes: bytes | None = None
     headers = {
         "Accept": "application/json",
