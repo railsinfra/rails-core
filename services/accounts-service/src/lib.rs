@@ -1,6 +1,7 @@
 //! accounts-api: HTTP + gRPC server and supporting modules.
 //! The binary entrypoint (`src/main.rs`) delegates to [`run`].
 
+pub mod audit_emit;
 pub mod config;
 pub mod errors;
 pub mod grpc;
@@ -107,10 +108,25 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         settings.users_grpc_url
     );
 
-    let app = create_router(pool.clone(), ledger_grpc.clone(), users_grpc.clone());
+    let audit_client = grpc::audit_channel(&settings.audit_grpc_url);
+    if audit_client.is_some() {
+        info!(
+            "Audit gRPC client configured at {} (lazy)",
+            settings.audit_grpc_url
+        );
+    } else {
+        tracing::warn!("AUDIT_GRPC_URL empty — audit append disabled");
+    }
+
+    let app = create_router(
+        pool.clone(),
+        ledger_grpc.clone(),
+        users_grpc.clone(),
+        audit_client,
+    );
 
     let grpc_addr = SocketAddr::from(([0, 0, 0, 0], settings.grpc_port));
-    let grpc_service = AccountsGrpcService::new(pool.clone());
+    let grpc_service = AccountsGrpcService::new();
 
     let retry_pool = pool.clone();
     let retry_ledger = ledger_grpc.clone();

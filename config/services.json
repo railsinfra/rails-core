@@ -22,6 +22,13 @@
       "language": "ruby",
       "summary": "Double-entry ledger, financial finality",
       "ports": { "http": 3000, "grpc": 50053 }
+    },
+    {
+      "id": "audit-service",
+      "path": "services/audit-service",
+      "language": "rust",
+      "summary": "Append-only audit trail ingest",
+      "ports": { "http": 8084, "grpc": 50054 }
     }
   ]
 }

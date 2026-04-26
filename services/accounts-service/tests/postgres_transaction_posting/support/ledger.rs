@@ -1,7 +1,7 @@
 use accounts_api::grpc::ledger_proto::ledger_service_server::{LedgerService, LedgerServiceServer};
 use accounts_api::grpc::ledger_proto::{
-    GetAccountBalanceRequest, GetAccountBalanceResponse, PostTransactionRequest,
-    PostTransactionResponse,
+    GetAccountBalanceRequest, GetAccountBalanceResponse, GetAccountBalancesRequest,
+    GetAccountBalancesResponse, PostTransactionRequest, PostTransactionResponse,
 };
 use std::sync::{Arc, Mutex};
 use tokio_stream::wrappers::TcpListenerStream;
@@ -39,8 +39,8 @@ impl LedgerService for MockLedger {
         }
         Ok(Response::new(PostTransactionResponse {
             status: "posted".into(),
-            ledger_transaction_id: String::new(),
-            failure_reason: String::new(),
+            ledger_transaction_id: String::default(),
+            failure_reason: String::default(),
         }))
     }
 
@@ -50,6 +50,17 @@ impl LedgerService for MockLedger {
     ) -> Result<Response<GetAccountBalanceResponse>, Status> {
         Ok(Response::new(GetAccountBalanceResponse {
             balance: "0".into(),
+            currency: "USD".into(),
+        }))
+    }
+
+    async fn get_account_balances(
+        &self,
+        _req: Request<GetAccountBalancesRequest>,
+    ) -> Result<Response<GetAccountBalancesResponse>, Status> {
+        Ok(Response::new(GetAccountBalancesResponse {
+            from_balance: "0".into(),
+            to_balance: "0".into(),
             currency: "USD".into(),
         }))
     }

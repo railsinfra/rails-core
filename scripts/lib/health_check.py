@@ -50,6 +50,7 @@ def main() -> int:
         (f"{base}/users/health", "users health"),
         (f"{base}/accounts/health", "accounts health"),
         (f"{base}/ledger/health", "ledger health"),
+        (f"{base}/audit/health", "audit health"),
     ):
         if not _check_health_json(path, label, quiet=quiet):
             failures += 1

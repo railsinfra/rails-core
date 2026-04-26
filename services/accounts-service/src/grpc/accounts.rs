@@ -1,5 +1,3 @@
-use crate::errors::AppError;
-use sqlx::PgPool;
 use tonic::{Request, Response, Status};
 
 use super::proto::{
@@ -9,13 +7,11 @@ use super::proto::{
 };
 
 #[derive(Clone)]
-pub struct AccountsGrpcService {
-    pool: PgPool,
-}
+pub struct AccountsGrpcService;
 
 impl AccountsGrpcService {
-    pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+    pub fn new() -> Self {
+        Self
     }
 }
 
@@ -29,14 +25,5 @@ impl AccountsService for AccountsGrpcService {
         Err(Status::unimplemented(
             "GetAccountBalance is not supported by Accounts service",
         ))
-    }
-}
-
-fn map_app_error(err: AppError) -> Status {
-    match err {
-        AppError::NotFound(msg) => Status::not_found(msg),
-        AppError::Validation(msg) => Status::invalid_argument(msg),
-        AppError::BusinessLogic(msg) => Status::failed_precondition(msg),
-        other => Status::internal(other.to_string()),
     }
 }

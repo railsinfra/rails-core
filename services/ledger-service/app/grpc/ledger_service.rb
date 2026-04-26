@@ -115,6 +115,55 @@ class LedgerService < Rails::Ledger::V1::LedgerService::Service
     )
   end
 
+  def get_account_balances(request, _call)
+    organization_id = request.organization_id
+    environment = proto_env_to_string(request.environment)
+    from_external_account_id = request.from_external_account_id
+    to_external_account_id = request.to_external_account_id
+    currency = request.currency
+
+    Rails.logger.info "[LEDGER_GRPC] get_account_balances START org=#{organization_id} env=#{environment} from=#{from_external_account_id} to=#{to_external_account_id} currency=#{currency}"
+
+    from_account = LedgerAccount.find_by(
+      organization_id: organization_id,
+      environment: environment,
+      external_account_id: from_external_account_id,
+      currency: currency
+    )
+    to_account = LedgerAccount.find_by(
+      organization_id: organization_id,
+      environment: environment,
+      external_account_id: to_external_account_id,
+      currency: currency
+    )
+
+    from_balance = if from_account
+      AccountBalance.get_balance(
+        organization_id: organization_id,
+        environment: environment,
+        ledger_account_id: from_account.id
+      )
+    else
+      0
+    end
+    to_balance = if to_account
+      AccountBalance.get_balance(
+        organization_id: organization_id,
+        environment: environment,
+        ledger_account_id: to_account.id
+      )
+    else
+      0
+    end
+
+    Rails.logger.info "[LEDGER_GRPC] get_account_balances SUCCESS org=#{organization_id} from=#{from_external_account_id} to=#{to_external_account_id} from_balance=#{from_balance} to_balance=#{to_balance}"
+    Rails::Ledger::V1::GetAccountBalancesResponse.new(
+      from_balance: from_balance.to_s,
+      to_balance: to_balance.to_s,
+      currency: currency
+    )
+  end
+
   private
 
   def proto_env_to_string(proto_env)

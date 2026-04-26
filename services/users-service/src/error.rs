@@ -27,6 +27,20 @@ pub enum AppError {
     Internal,
 }
 
+impl AppError {
+    /// HTTP status for this error (keeps parity with [`IntoResponse`]).
+    pub fn status_code(&self) -> u16 {
+        match self {
+            AppError::Unauthorized => StatusCode::UNAUTHORIZED.as_u16(),
+            AppError::Forbidden | AppError::UnrecognizedSource => StatusCode::FORBIDDEN.as_u16(),
+            AppError::TooManyRequests => StatusCode::TOO_MANY_REQUESTS.as_u16(),
+            AppError::BadRequest(_) => StatusCode::BAD_REQUEST.as_u16(),
+            AppError::Conflict(_) => StatusCode::CONFLICT.as_u16(),
+            AppError::Internal => StatusCode::INTERNAL_SERVER_ERROR.as_u16(),
+        }
+    }
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, code, details, should_report) = match &self {
@@ -61,6 +75,20 @@ mod tests {
     use super::AppError;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
+
+    #[test]
+    fn status_code_matches_http_mapping() {
+        assert_eq!(AppError::Unauthorized.status_code(), 401);
+        assert_eq!(AppError::Forbidden.status_code(), 403);
+        assert_eq!(AppError::UnrecognizedSource.status_code(), 403);
+        assert_eq!(AppError::TooManyRequests.status_code(), 429);
+        assert_eq!(
+            AppError::BadRequest("bad".into()).status_code(),
+            400
+        );
+        assert_eq!(AppError::Conflict("dup".into()).status_code(), 409);
+        assert_eq!(AppError::Internal.status_code(), 500);
+    }
 
     #[test]
     fn into_response_status_codes() {

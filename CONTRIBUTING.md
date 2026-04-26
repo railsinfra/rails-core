@@ -34,6 +34,18 @@ From each service directory, use the same commands CI uses:
 
 From the repository root, `make verify` checks that vendored service folders exist.
 
+## Linting while you code (Rust, Ruby, DeepSource)
+
+CI runs **`cargo clippy --locked --all-targets`** in each Rust service. Run the same from that service’s directory before you push so you see the same lints as CI.
+
+**Editor (Rust):** In VS Code / Cursor, set **rust-analyzer › Check: Command** to **`clippy`** so problems surface on save like ESLint.
+
+**DeepSource vs Clippy:** DeepSource adds its own Rust rules (for example **RS-W1015**: avoid passing a **string literal** as the first argument to `std::env::set_var` / `remove_var` / `var`—use a **`const NAME: &str = "…";`** and pass `NAME`). Clippy does not emit that exact rule; matching DeepSource is mostly **convention + CI**. If a DeepSource finding is noise for tests, tune or ignore it in the DeepSource project settings rather than weakening Clippy for everyone.
+
+**Ruby (ledger-service):** The closest analogue to ESLint is **RuboCop** (or **Standard**, a preset on top of it). Add a committed `.rubocop.yml` (or Standard config) and run it locally when you touch Ruby; wire it into CI when you are ready. Enable **`Lint/AmbiguousBlockAssociation`** (or follow DeepSource **RB-LI1001**) so calls like **`assert logged.any? { ... }`** are written as **`assert(logged.any? { ... })`**—parentheses make sure the block attaches to **`any?`**, not **`assert`**.
+
+**Docker:** Hadolint-style rules (e.g. DeepSource **DOK-DL3015**, **DOK-DL3008**) expect **`apt-get install -y --no-install-recommends`** and **pinned** **`package=version`** lines when you add OS packages in Dockerfiles.
+
 ## Branching (Gitflow)
 
 Long-lived branches are **`main`** (production-ready) and **`develop`** (integration). We follow **Gitflow**-style branching for everything else:

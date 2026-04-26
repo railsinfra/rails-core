@@ -20,6 +20,111 @@ class LedgerServiceTest < ActiveSupport::TestCase
     assert_match(/organization_id/i, resp.failure_reason)
   end
 
+  test "get_account_balances returns zeros when both accounts unknown" do
+    org = SecureRandom.uuid
+    req = Rails::Ledger::V1::GetAccountBalancesRequest.new(
+      organization_id: org,
+      environment: Rails::Ledger::V1::Environment::SANDBOX,
+      from_external_account_id: "from-unknown-bal",
+      to_external_account_id: "to-unknown-bal",
+      currency: "USD"
+    )
+    resp = LedgerService.new.get_account_balances(req, nil)
+    assert_equal "0", resp.from_balance
+    assert_equal "0", resp.to_balance
+    assert_equal "USD", resp.currency
+  end
+
+  test "get_account_balances returns from balance when only from account exists" do
+    org = SecureRandom.uuid
+    from_ext = "grpc_from_only"
+    from_acct = LedgerAccount.resolve(
+      organization_id: org,
+      environment: "sandbox",
+      external_account_id: from_ext,
+      currency: "USD",
+      account_type: "liability"
+    )
+    AccountBalance.update_balance!(
+      organization_id: org,
+      environment: "sandbox",
+      ledger_account_id: from_acct.id,
+      amount_cents: 7,
+      currency: "USD",
+      entry_type: "debit"
+    )
+    req = Rails::Ledger::V1::GetAccountBalancesRequest.new(
+      organization_id: org,
+      environment: Rails::Ledger::V1::Environment::SANDBOX,
+      from_external_account_id: from_ext,
+      to_external_account_id: "to-missing-only",
+      currency: "USD"
+    )
+    resp = LedgerService.new.get_account_balances(req, nil)
+    assert_equal "7", resp.from_balance
+    assert_equal "0", resp.to_balance
+  end
+
+  test "get_account_balances returns stored balances for both accounts" do
+    org = SecureRandom.uuid
+    from_ext = "grpc_dual_from"
+    to_ext = "grpc_dual_to"
+    from_acct = LedgerAccount.resolve(
+      organization_id: org,
+      environment: "sandbox",
+      external_account_id: from_ext,
+      currency: "USD",
+      account_type: "liability"
+    )
+    to_acct = LedgerAccount.resolve(
+      organization_id: org,
+      environment: "sandbox",
+      external_account_id: to_ext,
+      currency: "USD",
+      account_type: "liability"
+    )
+    AccountBalance.update_balance!(
+      organization_id: org,
+      environment: "sandbox",
+      ledger_account_id: from_acct.id,
+      amount_cents: 11,
+      currency: "USD",
+      entry_type: "debit"
+    )
+    AccountBalance.update_balance!(
+      organization_id: org,
+      environment: "sandbox",
+      ledger_account_id: to_acct.id,
+      amount_cents: 22,
+      currency: "USD",
+      entry_type: "debit"
+    )
+    req = Rails::Ledger::V1::GetAccountBalancesRequest.new(
+      organization_id: org,
+      environment: Rails::Ledger::V1::Environment::SANDBOX,
+      from_external_account_id: from_ext,
+      to_external_account_id: to_ext,
+      currency: "USD"
+    )
+    resp = LedgerService.new.get_account_balances(req, nil)
+    assert_equal "11", resp.from_balance
+    assert_equal "22", resp.to_balance
+    assert_equal "USD", resp.currency
+  end
+
+  test "get_account_balances raises on invalid environment" do
+    req = Rails::Ledger::V1::GetAccountBalancesRequest.new(
+      organization_id: SecureRandom.uuid,
+      environment: 99_999,
+      from_external_account_id: "a",
+      to_external_account_id: "b",
+      currency: "USD"
+    )
+    assert_raises(GRPC::InvalidArgument) do
+      LedgerService.new.get_account_balances(req, nil)
+    end
+  end
+
   test "get_account_balance returns zero for unknown account" do
     req = Rails::Ledger::V1::GetAccountBalanceRequest.new(
       organization_id: SecureRandom.uuid,

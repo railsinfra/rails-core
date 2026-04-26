@@ -144,8 +144,8 @@ impl AccountTransactionResponse {
         balance_after: i64,
     ) -> Self {
         let (transaction_type, recipient_account_id) = match transaction.transaction_kind {
-            TransactionKind::Deposit => ("deposit".to_string(), String::new()),
-            TransactionKind::Withdraw => ("withdrawal".to_string(), String::new()),
+            TransactionKind::Deposit => ("deposit".to_string(), String::default()),
+            TransactionKind::Withdraw => ("withdrawal".to_string(), String::default()),
             TransactionKind::Transfer => {
                 if transaction.from_account_id == for_account_id {
                     ("withdrawal".to_string(), transaction.to_account_id.to_string())
@@ -180,12 +180,12 @@ impl AccountTransactionResponse {
             TransactionKind::Deposit => (
                 transaction.from_account_id,
                 "deposit".to_string(),
-                String::new(),
+                String::default(),
             ),
             TransactionKind::Withdraw => (
                 transaction.from_account_id,
                 "withdrawal".to_string(),
-                String::new(),
+                String::default(),
             ),
             TransactionKind::Transfer => (
                 transaction.from_account_id,

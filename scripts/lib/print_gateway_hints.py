@@ -10,6 +10,7 @@ ROWS: list[tuple[str, str]] = [
     ("Users API", "http://localhost:8080/users/..."),
     ("Accounts API", "http://localhost:8080/accounts/..."),
     ("Ledger API", "http://localhost:8080/ledger/..."),
+    ("Audit API (health)", "http://localhost:8080/audit/..."),
 ]
 
 
