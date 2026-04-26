@@ -316,36 +316,38 @@ mod stale_secs_tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    const ENV_KEY: &str = "TRANSACTION_POSTING_STALE_AFTER_SECS";
+
     #[test]
     fn stale_secs_default_when_unset() {
         let _g = ENV_LOCK.lock().unwrap();
-        std::env::remove_var(TRANSACTION_POSTING_STALE_AFTER_SECS);
+        std::env::remove_var(ENV_KEY);
         assert_eq!(stale_posting_secs_from_env(), 600);
     }
 
     #[test]
-    static TRANSACTION_POSTING_STALE_AFTER_SECS: &str = "TRANSACTION_POSTING_STALE_AFTER_SECS";
-        fn stale_secs_from_env() {
-            let _g = ENV_LOCK.lock().unwrap();
-            std::env::set_var(TRANSACTION_POSTING_STALE_AFTER_SECS, "120");
-            assert_eq!(stale_posting_secs_from_env(), 120);
-            std::env::remove_var(TRANSACTION_POSTING_STALE_AFTER_SECS);
-        }
+    fn stale_secs_from_env() {
+        let _g = ENV_LOCK.lock().unwrap();
+        std::env::set_var(ENV_KEY, "120");
+        assert_eq!(stale_posting_secs_from_env(), 120);
+        std::env::remove_var(ENV_KEY);
+    }
+
     #[test]
-    static TRANSACTION_POSTING_STALE_AFTER_SECS: &str = "TRANSACTION_POSTING_STALE_AFTER_SECS";
     fn stale_secs_invalid_env_falls_back() {
         let _g = ENV_LOCK.lock().unwrap();
-        std::env::set_var(TRANSACTION_POSTING_STALE_AFTER_SECS, "0");
+        std::env::set_var(ENV_KEY, "0");
         assert_eq!(stale_posting_secs_from_env(), 600);
-        std::env::set_var(TRANSACTION_POSTING_STALE_AFTER_SECS, "-5");
+        std::env::set_var(ENV_KEY, "-5");
         assert_eq!(stale_posting_secs_from_env(), 600);
-        std::env::remove_var(TRANSACTION_POSTING_STALE_AFTER_SECS);
+        std::env::remove_var(ENV_KEY);
     }
+
     #[test]
     fn stale_secs_non_numeric_falls_back() {
         let _g = ENV_LOCK.lock().unwrap();
-        std::env::set_var(TRANSACTION_POSTING_STALE_AFTER_SECS, NOT_A_NUMBER);
+        std::env::set_var(ENV_KEY, "not-a-number");
         assert_eq!(stale_posting_secs_from_env(), 600);
-        std::env::remove_var(TRANSACTION_POSTING_STALE_AFTER_SECS);
+        std::env::remove_var(ENV_KEY);
     }
 }

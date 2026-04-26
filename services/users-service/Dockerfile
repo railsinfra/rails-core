@@ -1,3 +1,6 @@
+# Build context must be the **repository root** (see `.github/workflows/ci.yml` docker-builds).
+# The crate depends on `../audit-service` and `build.rs` compiles protos under `../../proto`.
+
 # Build stage
 FROM rust:1.92-slim-bookworm AS builder
 
@@ -13,10 +16,12 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy manifests first for dependency caching
-COPY Cargo.toml Cargo.lock ./
-COPY .sqlx ./.sqlx
-COPY build.rs ./
-COPY proto ./proto
+COPY services/users-service/Cargo.toml services/users-service/Cargo.lock ./
+COPY services/users-service/.sqlx ./.sqlx
+COPY services/users-service/build.rs ./
+COPY services/users-service/proto ./proto
+COPY services/audit-service /audit-service
+COPY proto /proto
 
 # Create dummy src to cache dependencies
 RUN mkdir -p src && \
@@ -31,8 +36,8 @@ RUN cargo build --release 2>/dev/null || true
 RUN rm -rf src
 
 # Copy actual source code
-COPY src ./src
-COPY migrations ./migrations
+COPY services/users-service/src ./src
+COPY services/users-service/migrations ./migrations
 
 # Build the application
 RUN touch src/main.rs && cargo build --release

@@ -35,7 +35,7 @@ async fn append_audit_event_persists_row() {
     let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
 
     let pool = PgPoolOptions::new()
-        .max_connections(15)
+        .max_connections(10)
         .acquire_timeout(Duration::from_secs(90))
         .connect(&url)
         .await

@@ -14,12 +14,14 @@ use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::Row;
 use testcontainers::runners::AsyncRunner;
+use testcontainers::ContainerAsync;
 use testcontainers_modules::postgres::Postgres;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::{Channel, Endpoint, Server};
 use uuid::Uuid;
 
 async fn start_audit_stack() -> (
+    ContainerAsync<Postgres>,
     sqlx::PgPool,
     Option<AuditServiceClient<Channel>>,
     tokio::task::JoinHandle<Result<(), tonic::transport::Error>>,
@@ -37,7 +39,7 @@ async fn start_audit_stack() -> (
     let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
 
     let pool = PgPoolOptions::new()
-        .max_connections(15)
+        .max_connections(10)
         .acquire_timeout(Duration::from_secs(90))
         .connect(&url)
         .await
@@ -68,14 +70,14 @@ async fn start_audit_stack() -> (
         .connect_lazy();
     let client = AuditServiceClient::new(ch);
 
-    (pool, Some(client), join, shutdown_tx)
+    (container, pool, Some(client), join, shutdown_tx)
 }
 
 // Multi-thread: see users-service `audit_emit_e2e` — tonic + sqlx need concurrent polling under CI.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker (testcontainers); CI runs: cargo test --locked -- --include-ignored"]
 async fn accounts_emit_persists_audit_row() {
-    let (pool, audit_client, join, shutdown_tx) = start_audit_stack().await;
+    let (_container, pool, audit_client, join, shutdown_tx) = start_audit_stack().await;
 
     let correlation_id = format!("e2e-accounts-{}", Uuid::new_v4());
     let mut headers = HeaderMap::new();

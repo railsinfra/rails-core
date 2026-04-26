@@ -35,5 +35,10 @@ require_relative "support/test_stubbing"
 class ActiveSupport::TestCase
   include TestStubbing
 
-  parallelize(workers: ENV["COVERAGE"] == "true" ? 1 : :number_of_processors)
+  # CI provides a single `ledger_test` DB; parallel workers expect `ledger_test-0`, etc.
+  parallelize(workers: if ENV["COVERAGE"] == "true" || ENV["CI"] == "true"
+                          1
+                        else
+                          :number_of_processors
+                        end)
 end

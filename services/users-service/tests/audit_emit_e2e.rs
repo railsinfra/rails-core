@@ -11,6 +11,7 @@ use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::Row;
 use testcontainers::runners::AsyncRunner;
+use testcontainers::ContainerAsync;
 use testcontainers_modules::postgres::Postgres;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
@@ -22,6 +23,7 @@ use users_service::grpc::{audit_proto::audit_service_client::AuditServiceClient,
 use tonic::transport::Endpoint;
 
 async fn start_audit_stack() -> (
+    ContainerAsync<Postgres>,
     sqlx::PgPool,
     GrpcClients,
     tokio::task::JoinHandle<Result<(), tonic::transport::Error>>,
@@ -39,7 +41,7 @@ async fn start_audit_stack() -> (
     let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
 
     let pool = PgPoolOptions::new()
-        .max_connections(15)
+        .max_connections(10)
         .acquire_timeout(Duration::from_secs(90))
         .connect(&url)
         .await
@@ -71,7 +73,8 @@ async fn start_audit_stack() -> (
     let audit_client = AuditServiceClient::new(ch);
     let grpc = GrpcClients::new(None, Some(audit_client));
 
-    (pool, grpc, join, shutdown_tx)
+    // Keep `container` in the tuple so dropping it does not stop Postgres mid-test (PoolTimedOut).
+    (container, pool, grpc, join, shutdown_tx)
 }
 
 // Multi-thread: tonic server runs on spawned tasks; a single-thread test runtime can deadlock
@@ -79,7 +82,7 @@ async fn start_audit_stack() -> (
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker (testcontainers); CI runs: cargo test --locked -- --include-ignored"]
 async fn users_emit_persists_audit_row() {
-    let (pool, grpc, join, shutdown_tx) = start_audit_stack().await;
+    let (_container, pool, grpc, join, shutdown_tx) = start_audit_stack().await;
 
     let correlation_id = format!("e2e-users-{}", Uuid::new_v4());
     let mut headers = HeaderMap::new();

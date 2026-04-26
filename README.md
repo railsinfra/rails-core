@@ -1,6 +1,7 @@
 # rails-core
 
 [![Codecov](https://codecov.io/gh/railsinfra/rails-core/graph/badge.svg?branch=main)](https://app.codecov.io/gh/railsinfra/rails-core)
+[![DeepSource](https://app.deepsource.com/gh/railsinfra/rails-core.svg/?label=active+issues&show_trend=true)](https://app.deepsource.com/gh/railsinfra/rails-core/)
 
 ## What this project is / is not
 
