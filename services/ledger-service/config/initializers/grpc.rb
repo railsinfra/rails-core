@@ -39,7 +39,9 @@ should_start_grpc = is_server_mode && !is_console_mode && !is_rake_task && ENV['
 
 # Log detection results for debugging
 if Rails.env.development?
-  Rails.logger.debug "gRPC initialization check: server_mode=#{is_server_mode}, console_mode=#{is_console_mode}, rake_task=#{is_rake_task}, should_start=#{should_start_grpc}"
+  Rails.logger.debug do
+    "gRPC initialization check: server_mode=#{is_server_mode}, console_mode=#{is_console_mode}, rake_task=#{is_rake_task}, should_start=#{should_start_grpc}"
+  end
 end
 
 if (Rails.env.development? || Rails.env.production?) && should_start_grpc
