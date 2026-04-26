@@ -159,7 +159,8 @@ impl FromRequestParts<AppState> for AuthContext {
             .strip_prefix("Bearer ")
             .ok_or(AppError::Unauthorized)?;
 
-        let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| "dev_secret".to_string());
+        const JWT_SECRET_ENV: &str = "JWT_SECRET";
+        let secret = std::env::var(JWT_SECRET_ENV).unwrap_or_else(|_| "dev_secret".to_string());
         let decoded = decode::<JwtClaims>(
             token,
             &DecodingKey::from_secret(secret.as_bytes()),
@@ -330,7 +331,8 @@ impl FromRequestParts<AppState> for ApiKeyOnlyContext {
 }
 
 pub(crate) fn hash_api_key(api_key_plain: &str) -> Result<String, AppError> {
-    let secret = std::env::var("API_KEY_HASH_SECRET")
+    const API_KEY_HASH_SECRET_ENV: &str = "API_KEY_HASH_SECRET";
+    let secret = std::env::var(API_KEY_HASH_SECRET_ENV)
         .unwrap_or_else(|_| "dev_api_key_hash_secret".to_string());
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).map_err(|_| AppError::Internal)?;
     mac.update(api_key_plain.as_bytes());
@@ -356,16 +358,17 @@ mod tests {
     #[test]
     fn hash_api_key_is_stable_for_same_input() {
         let _lock = global_test_lock();
-        let saved = std::env::var("API_KEY_HASH_SECRET").ok();
-        std::env::set_var("API_KEY_HASH_SECRET", "unit_test_api_key_hash_secret_fixed");
+        const API_KEY_HASH_SECRET_ENV: &str = "API_KEY_HASH_SECRET";
+        let saved = std::env::var(API_KEY_HASH_SECRET_ENV).ok();
+        std::env::set_var(API_KEY_HASH_SECRET_ENV, "unit_test_api_key_hash_secret_fixed");
         let a = hash_api_key("my-api-key").expect("hash");
         let b = hash_api_key("my-api-key").expect("hash");
         assert_eq!(a, b);
         assert_ne!(a, hash_api_key("other-key").expect("hash"));
         assert_eq!(a.len(), 64);
         match saved {
-            Some(v) => std::env::set_var("API_KEY_HASH_SECRET", v),
-            None => std::env::remove_var("API_KEY_HASH_SECRET"),
+            Some(v) => std::env::set_var(API_KEY_HASH_SECRET_ENV, v),
+            None => std::env::remove_var(API_KEY_HASH_SECRET_ENV),
         }
     }
 }

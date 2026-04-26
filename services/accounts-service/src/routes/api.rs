@@ -9,7 +9,10 @@ use axum::{
 use sqlx::PgPool;
 use std::sync::OnceLock;
 use std::time::Duration;
+use tonic::transport::Channel;
 use uuid::Uuid;
+
+use crate::grpc::audit_proto::audit_service_client::AuditServiceClient;
 
 use crate::handlers::{
     accounts::*,
@@ -22,18 +25,51 @@ use crate::ledger_grpc::LedgerGrpc;
 use crate::routes::rate_limit::{extract_client_key, RateLimitConfig, RateLimiter};
 use crate::users_grpc::UsersGrpc;
 
+fn log_request_boundary(
+    phase: &str,
+    method: &str,
+    path: &str,
+    correlation_id: &str,
+    status: Option<u16>,
+    duration_ms: Option<u64>,
+) {
+    let banner = format!(
+        "-----------------------[{phase} - {} {}]----------------------------",
+        method,
+        path
+    );
+    tracing::info!(
+        target = "accounts.request_boundary",
+        marker = %banner,
+        phase,
+        method,
+        path,
+        correlation_id,
+        status = status.unwrap_or(0),
+        duration_ms = duration_ms.unwrap_or(0),
+        "{banner}"
+    );
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
     pub ledger_grpc: LedgerGrpc,
     pub users_grpc: UsersGrpc,
+    pub audit_client: Option<AuditServiceClient<Channel>>,
 }
 
-pub fn create_router(pool: PgPool, ledger_grpc: LedgerGrpc, users_grpc: UsersGrpc) -> Router {
+pub fn create_router(
+    pool: PgPool,
+    ledger_grpc: LedgerGrpc,
+    users_grpc: UsersGrpc,
+    audit_client: Option<AuditServiceClient<Channel>>,
+) -> Router {
     let state = AppState {
         pool,
         ledger_grpc,
         users_grpc,
+        audit_client,
     };
     Router::<AppState>::new()
         .route("/", get(service_root))
@@ -94,6 +130,7 @@ async fn correlation_id_middleware(
     }
 
     let start = std::time::Instant::now();
+    log_request_boundary("START", &method, &path, &correlation_id, None, None);
     tracing::info!(correlation_id = %correlation_id, %method, %path, "start");
 
     let mut res = next.run(req).await;
@@ -114,6 +151,14 @@ async fn correlation_id_middleware(
     } else {
         tracing::info!(correlation_id = %correlation_id, %method, %path, status = status, duration_ms = duration_ms as u64, outcome = outcome, "finish");
     }
+    log_request_boundary(
+        "END",
+        &method,
+        &path,
+        &correlation_id,
+        Some(status),
+        Some(duration_ms as u64),
+    );
 
     Ok(res)
 }
@@ -121,12 +166,14 @@ async fn correlation_id_middleware(
 static MONEY_RATE_LIMITER: OnceLock<RateLimiter> = OnceLock::new();
 
 fn money_rate_limit_config() -> RateLimitConfig {
-    let window_seconds = std::env::var("ACCOUNTS_MONEY_RATE_LIMIT_WINDOW_SECONDS")
+    const ACCOUNTS_MONEY_RATE_LIMIT_WINDOW_SECONDS_ENV: &str = "ACCOUNTS_MONEY_RATE_LIMIT_WINDOW_SECONDS";
+    const ACCOUNTS_MONEY_RATE_LIMIT_MAX_ENV: &str = "ACCOUNTS_MONEY_RATE_LIMIT_MAX";
+    let window_seconds = std::env::var(ACCOUNTS_MONEY_RATE_LIMIT_WINDOW_SECONDS_ENV)
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .filter(|v| *v > 0)
         .unwrap_or(60);
-    let max_requests = std::env::var("ACCOUNTS_MONEY_RATE_LIMIT_MAX")
+    let max_requests = std::env::var(ACCOUNTS_MONEY_RATE_LIMIT_MAX_ENV)
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
         .filter(|v| *v > 0)

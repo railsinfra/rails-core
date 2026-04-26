@@ -12,6 +12,8 @@ class LedgerTransaction < ApplicationRecord
   has_many :ledger_entries, foreign_key: 'transaction_id', inverse_of: :ledger_transaction,
                             dependent: :destroy
 
+  after_commit :emit_audit_if_newly_posted, on: :update
+
   enum status: {
     pending: 'pending',
     posted: 'posted',
@@ -32,5 +34,18 @@ class LedgerTransaction < ApplicationRecord
 
   def mark_as_failed!(reason:)
     update!(status: 'failed', failure_reason: reason)
+  end
+
+  private
+
+  def emit_audit_if_newly_posted
+    return unless status == 'posted'
+
+    prev = previous_changes['status']
+    return unless prev.is_a?(Array) && prev.first != 'posted' && prev.last == 'posted'
+
+    AuditAppend.emit_ledger_transaction_posted(self)
+  rescue StandardError => e
+    Rails.logger.error "[AUDIT] after_commit error: #{e.class}: #{e.message}"
   end
 end

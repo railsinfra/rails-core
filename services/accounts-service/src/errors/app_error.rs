@@ -39,6 +39,20 @@ pub enum AppError {
     Internal(String),
 }
 
+impl AppError {
+    pub fn status_code(&self) -> u16 {
+        match self {
+            AppError::Database(_) => 500,
+            AppError::NotFound(_) => 404,
+            AppError::Validation(_) | AppError::BusinessLogic(_) | AppError::AccountNotActive
+            | AppError::InsufficientFunds | AppError::InvalidAccountType => 400,
+            AppError::TooManyRequests => 429,
+            AppError::Unauthorized(_) => 401,
+            AppError::Internal(_) => 500,
+        }
+    }
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, error_message, _should_report) = match &self {

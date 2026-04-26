@@ -15,7 +15,7 @@ cd rails-core
 cp .env.example .env
 ```
 
-Set `NEON_API_KEY` in `.env` ([Neon API keys](https://neon.tech/docs/manage/api-keys)) so bootstrap can fill the database URLs, **or** set `USERS_DATABASE_URL`, `ACCOUNTS_DATABASE_URL`, and `LEDGER_DATABASE_URL` manually. Optional Neon-related keys are listed in `.env.example`. Console deep links in the printed table are shortened with Bitly if configured, otherwise **is.gd** (stdlib HTTP); use `NEON_CONSOLE_NO_PUBLIC_SHORTENER=yes` to skip is.gd.
+Set `NEON_API_KEY` in `.env` ([Neon API keys](https://neon.tech/docs/manage/api-keys)) so bootstrap can fill the database URLs, **or** set `USERS_DATABASE_URL`, `ACCOUNTS_DATABASE_URL`, `LEDGER_DATABASE_URL`, and `AUDIT_DATABASE_URL` manually. Optional Neon-related keys are listed in `.env.example`. Console deep links in the printed table are shortened with Bitly if configured, otherwise **is.gd** (stdlib HTTP); use `NEON_CONSOLE_NO_PUBLIC_SHORTENER=yes` to skip is.gd.
 
 ## 3. Run everything
 

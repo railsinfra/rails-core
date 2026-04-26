@@ -4,6 +4,7 @@ pub struct Config {
     pub server_addr: String,
     pub grpc_port: u16,
     pub accounts_grpc_url: String,
+    pub audit_grpc_url: String,
     pub sentry_dsn: Option<String>,
     pub environment: String,
     pub resend_api_key: Option<String>,
@@ -33,7 +34,23 @@ pub(crate) fn compose_server_addr(
 }
 
 pub fn load() -> Result<Config, anyhow::Error> {
-    let database_url_raw = std::env::var("DATABASE_URL")
+    const DATABASE_URL_ENV: &str = "DATABASE_URL";
+    const HOST_ENV: &str = "HOST";
+    const PORT_ENV: &str = "PORT";
+    const SERVER_ADDR_ENV: &str = "SERVER_ADDR";
+    const GRPC_PORT_ENV: &str = "GRPC_PORT";
+    const ACCOUNTS_GRPC_URL_ENV: &str = "ACCOUNTS_GRPC_URL";
+    const AUDIT_GRPC_URL_ENV: &str = "AUDIT_GRPC_URL";
+    const SENTRY_DSN_ENV: &str = "SENTRY_DSN";
+    const ENVIRONMENT_ENV: &str = "ENVIRONMENT";
+    const RESEND_API_KEY_ENV: &str = "RESEND_API_KEY";
+    const RESEND_FROM_EMAIL_ENV: &str = "RESEND_FROM_EMAIL";
+    const RESEND_FROM_NAME_ENV: &str = "RESEND_FROM_NAME";
+    const RESEND_BASE_URL_ENV: &str = "RESEND_BASE_URL";
+    const RESEND_BETA_NOTIFICATION_EMAIL_ENV: &str = "RESEND_BETA_NOTIFICATION_EMAIL";
+    const FRONTEND_BASE_URL_ENV: &str = "FRONTEND_BASE_URL";
+
+    let database_url_raw = std::env::var(DATABASE_URL_ENV)
         .map_err(|_| anyhow::anyhow!(
             "DATABASE_URL environment variable is required. \
             Set it to your PostgreSQL connection string (e.g., Supabase, Neon, or local PostgreSQL). \
@@ -41,33 +58,37 @@ pub fn load() -> Result<Config, anyhow::Error> {
         ))?;
     let database_url = strip_jdbc_database_url_prefix(&database_url_raw).to_string();
 
-    let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
-    let port = std::env::var("PORT").ok().and_then(|p| p.parse::<u16>().ok());
-    let server_addr_env = std::env::var("SERVER_ADDR").ok();
+    let host = std::env::var(HOST_ENV).unwrap_or_else(|_| "0.0.0.0".to_string());
+    let port = std::env::var(PORT_ENV)
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok());
+    let server_addr_env = std::env::var(SERVER_ADDR_ENV).ok();
     let server_addr = compose_server_addr(&host, port, server_addr_env.as_deref());
 
-    let grpc_port = std::env::var("GRPC_PORT")
+    let grpc_port = std::env::var(GRPC_PORT_ENV)
         .ok()
         .and_then(|p| p.parse::<u16>().ok())
         .unwrap_or(50051);
 
-    let accounts_grpc_url = std::env::var("ACCOUNTS_GRPC_URL")
+    let accounts_grpc_url = std::env::var(ACCOUNTS_GRPC_URL_ENV)
         .unwrap_or_else(|_| "http://localhost:50052".to_string());
+
+    let audit_grpc_url = std::env::var(AUDIT_GRPC_URL_ENV)
+        .unwrap_or_else(|_| "http://localhost:50054".to_string());
+
+    let sentry_dsn = std::env::var(SENTRY_DSN_ENV).ok();
+    let environment = std::env::var(ENVIRONMENT_ENV).unwrap_or_else(|_| "development".to_string());
     
-    let sentry_dsn = std::env::var("SENTRY_DSN").ok();
-    let environment = std::env::var("ENVIRONMENT")
-        .unwrap_or_else(|_| "development".to_string());
-    
-    let resend_api_key = std::env::var("RESEND_API_KEY").ok();
-    let resend_from_email = std::env::var("RESEND_FROM_EMAIL")
+    let resend_api_key = std::env::var(RESEND_API_KEY_ENV).ok();
+    let resend_from_email = std::env::var(RESEND_FROM_EMAIL_ENV)
         .unwrap_or_else(|_| "noreply@rails.co.za".to_string());
-    let resend_from_name = std::env::var("RESEND_FROM_NAME")
+    let resend_from_name = std::env::var(RESEND_FROM_NAME_ENV)
         .unwrap_or_else(|_| "Rails Financial Infrastructure".to_string());
-    let resend_base_url = std::env::var("RESEND_BASE_URL")
+    let resend_base_url = std::env::var(RESEND_BASE_URL_ENV)
         .unwrap_or_else(|_| "https://api.resend.com".to_string());
-    let resend_beta_notification_email = std::env::var("RESEND_BETA_NOTIFICATION_EMAIL")
+    let resend_beta_notification_email = std::env::var(RESEND_BETA_NOTIFICATION_EMAIL_ENV)
         .unwrap_or_else(|_| resend_from_email.clone());
-    let frontend_base_url = std::env::var("FRONTEND_BASE_URL")
+    let frontend_base_url = std::env::var(FRONTEND_BASE_URL_ENV)
         .unwrap_or_else(|_| "http://localhost:5173".to_string());
     
     Ok(Config {
@@ -75,6 +96,7 @@ pub fn load() -> Result<Config, anyhow::Error> {
         server_addr,
         grpc_port,
         accounts_grpc_url,
+        audit_grpc_url,
         sentry_dsn,
         environment,
         resend_api_key,
@@ -95,6 +117,7 @@ impl Config {
             server_addr: "0.0.0.0:0".into(),
             grpc_port: 50051,
             accounts_grpc_url,
+            audit_grpc_url: "http://127.0.0.1:1".into(),
             sentry_dsn: None,
             environment: "test".into(),
             resend_api_key: None,
@@ -162,24 +185,29 @@ mod tests {
     #[test]
     fn load_errors_when_database_url_missing() {
         let _l = test_env_lock();
-        let saved_db = std::env::var("DATABASE_URL").ok();
-        std::env::remove_var("DATABASE_URL");
+        const DATABASE_URL_ENV: &str = "DATABASE_URL";
+        let saved_db = std::env::var(DATABASE_URL_ENV).ok();
+        std::env::remove_var(DATABASE_URL_ENV);
         assert!(load().is_err());
-        restore_env("DATABASE_URL", saved_db);
+        restore_env(DATABASE_URL_ENV, saved_db);
     }
 
     #[test]
     fn load_strips_jdbc_prefix_and_reads_optional_env() {
         let _l = test_env_lock();
-        let saved_db = std::env::var("DATABASE_URL").ok();
-        let saved_grpc = std::env::var("GRPC_PORT").ok();
-        let saved_accounts = std::env::var("ACCOUNTS_GRPC_URL").ok();
-        let saved_from = std::env::var("RESEND_FROM_EMAIL").ok();
+        const DATABASE_URL_ENV: &str = "DATABASE_URL";
+        const GRPC_PORT_ENV: &str = "GRPC_PORT";
+        const ACCOUNTS_GRPC_URL_ENV: &str = "ACCOUNTS_GRPC_URL";
+        const RESEND_FROM_EMAIL_ENV: &str = "RESEND_FROM_EMAIL";
+        let saved_db = std::env::var(DATABASE_URL_ENV).ok();
+        let saved_grpc = std::env::var(GRPC_PORT_ENV).ok();
+        let saved_accounts = std::env::var(ACCOUNTS_GRPC_URL_ENV).ok();
+        let saved_from = std::env::var(RESEND_FROM_EMAIL_ENV).ok();
 
-        std::env::set_var("DATABASE_URL", "jdbc:postgresql://db.example:5432/app");
-        std::env::set_var("GRPC_PORT", "60001");
-        std::env::set_var("ACCOUNTS_GRPC_URL", "http://accounts.test:999");
-        std::env::set_var("RESEND_FROM_EMAIL", "custom-from@example.com");
+        std::env::set_var(DATABASE_URL_ENV, "jdbc:postgresql://db.example:5432/app");
+        std::env::set_var(GRPC_PORT_ENV, "60001");
+        std::env::set_var(ACCOUNTS_GRPC_URL_ENV, "http://accounts.test:999");
+        std::env::set_var(RESEND_FROM_EMAIL_ENV, "custom-from@example.com");
 
         let c = load().expect("load");
         assert_eq!(c.database_url, "postgresql://db.example:5432/app");
@@ -187,9 +215,9 @@ mod tests {
         assert_eq!(c.accounts_grpc_url, "http://accounts.test:999");
         assert_eq!(c.resend_from_email, "custom-from@example.com");
 
-        restore_env("DATABASE_URL", saved_db);
-        restore_env("GRPC_PORT", saved_grpc);
-        restore_env("ACCOUNTS_GRPC_URL", saved_accounts);
-        restore_env("RESEND_FROM_EMAIL", saved_from);
+        restore_env(DATABASE_URL_ENV, saved_db);
+        restore_env(GRPC_PORT_ENV, saved_grpc);
+        restore_env(ACCOUNTS_GRPC_URL_ENV, saved_accounts);
+        restore_env(RESEND_FROM_EMAIL_ENV, saved_from);
     }
 }

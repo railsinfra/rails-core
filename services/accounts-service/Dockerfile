@@ -1,3 +1,5 @@
+# Build context must be the **repository root** (see `.github/workflows/ci.yml` docker-builds).
+
 # Build stage
 FROM rust:1.92-slim-bookworm AS builder
 
@@ -5,18 +7,20 @@ WORKDIR /app
 
 ENV SQLX_OFFLINE=true
 
-# Install build dependencies
-RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
-    protobuf-compiler \
+# Install build dependencies (pinned + --no-install-recommends for reproducible, smaller images)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config=1.8.1-1 \
+    libssl-dev=3.0.19-1~deb12u2 \
+    protobuf-compiler=3.21.12-3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy manifests first for dependency caching
-COPY Cargo.toml Cargo.lock ./
-COPY .sqlx ./.sqlx
-COPY build.rs ./
-COPY proto ./proto
+COPY services/accounts-service/Cargo.toml services/accounts-service/Cargo.lock ./
+COPY services/accounts-service/.sqlx ./.sqlx
+COPY services/accounts-service/build.rs ./
+COPY services/accounts-service/proto ./proto
+COPY services/audit-service /audit-service
+COPY proto /proto
 
 # Create dummy src to cache dependencies
 RUN mkdir -p src && \
@@ -31,9 +35,9 @@ RUN cargo build --release 2>/dev/null || true
 RUN rm -rf src
 
 # Copy actual source code
-COPY src ./src
-COPY migrations ./migrations
-COPY migrations_accounts ./migrations_accounts
+COPY services/accounts-service/src ./src
+COPY services/accounts-service/migrations ./migrations
+COPY services/accounts-service/migrations_accounts ./migrations_accounts
 
 # Build the application
 RUN touch src/main.rs && cargo build --release
@@ -42,10 +46,10 @@ RUN touch src/main.rs && cargo build --release
 FROM debian:bookworm-slim
 
 # Install runtime dependencies (curl for HEALTHCHECK)
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    libssl3 \
-    curl \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates=20230311+deb12u1 \
+    libssl3=3.0.19-1~deb12u2 \
+    curl=7.88.1-10+deb12u14 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

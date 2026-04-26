@@ -18,6 +18,7 @@ module Rails
 
           rpc :PostTransaction, ::Rails::Ledger::V1::PostTransactionRequest, ::Rails::Ledger::V1::PostTransactionResponse
           rpc :GetAccountBalance, ::Rails::Ledger::V1::GetAccountBalanceRequest, ::Rails::Ledger::V1::GetAccountBalanceResponse
+          rpc :GetAccountBalances, ::Rails::Ledger::V1::GetAccountBalancesRequest, ::Rails::Ledger::V1::GetAccountBalancesResponse
         end
 
         Stub = Service.rpc_stub_class
