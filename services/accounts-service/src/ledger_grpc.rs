@@ -199,6 +199,7 @@ mod ledger_grpc_tests {
     use tonic::{transport::Server, Request, Response, Status};
 
     static LEDGER_TIMEOUT_ENV_LOCK: Mutex<()> = Mutex::new(());
+    const LEDGER_GRPC_TIMEOUT_SECS: &str = "LEDGER_GRPC_TIMEOUT_SECS";
 
     #[derive(Clone, Default)]
     struct MockOk;
@@ -411,19 +412,15 @@ mod ledger_grpc_tests {
     }
 
     #[tokio::test]
-    static LEDGER_GRPC_TIMEOUT_SECS: &str = "LEDGER_GRPC_TIMEOUT_SECS";
-
-        async fn custom_timeout_from_env() {
-            let _g = LEDGER_TIMEOUT_ENV_LOCK.lock().unwrap();
-            std::env::set_var(LEDGER_GRPC_TIMEOUT_SECS, "42");
-            let client = LedgerGrpc::new("http://127.0.0.1:9".to_string());
-            assert_eq!(client.timeout().as_secs(), 42);
-            std::env::remove_var(LEDGER_GRPC_TIMEOUT_SECS);
-        }
+    async fn custom_timeout_from_env() {
+        let _g = LEDGER_TIMEOUT_ENV_LOCK.lock().unwrap();
+        std::env::set_var(LEDGER_GRPC_TIMEOUT_SECS, "42");
+        let client = LedgerGrpc::new("http://127.0.0.1:9".to_string());
+        assert_eq!(client.timeout().as_secs(), 42);
+        std::env::remove_var(LEDGER_GRPC_TIMEOUT_SECS);
+    }
 
     #[tokio::test]
-    static LEDGER_GRPC_TIMEOUT_SECS: &str = "LEDGER_GRPC_TIMEOUT_SECS";
-
     async fn invalid_timeout_env_uses_default_sixty() {
         let _g = LEDGER_TIMEOUT_ENV_LOCK.lock().unwrap();
         std::env::set_var(LEDGER_GRPC_TIMEOUT_SECS, "0");

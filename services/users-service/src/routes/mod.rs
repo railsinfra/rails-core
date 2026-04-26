@@ -221,6 +221,8 @@ mod tests {
     use axum::http::Request;
     use std::net::SocketAddr;
 
+    const USERS_TRUSTED_PROXY_IPS: &str = "USERS_TRUSTED_PROXY_IPS";
+
     fn reset_auth_rate_limiter() {
         if let Some(limiter) = AUTH_RATE_LIMITER.get() {
             limiter.reset();
@@ -252,8 +254,6 @@ mod tests {
     }
 
     #[test]
-    static USERS_TRUSTED_PROXY_IPS: &str = "USERS_TRUSTED_PROXY_IPS";
-
     fn extract_client_key_uses_forwarded_ip_when_trusted() {
         let _lock = global_test_lock();
         std::env::set_var(USERS_TRUSTED_PROXY_IPS, "127.0.0.1");
@@ -263,7 +263,7 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         req.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
-        assert_eq!(extract_client_key(&req, "USERS_TRUSTED_PROXY_IPS"), "203.0.113.10");
+        assert_eq!(extract_client_key(&req, USERS_TRUSTED_PROXY_IPS), "203.0.113.10");
     }
     #[test]
     fn log_correlation_request_finished_covers_status_branches() {

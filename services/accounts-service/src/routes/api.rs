@@ -215,6 +215,8 @@ mod tests {
         TEST_ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
     }
 
+    const ACCOUNTS_TRUSTED_PROXY_IPS: &str = "ACCOUNTS_TRUSTED_PROXY_IPS";
+
     #[test]
     fn money_rate_limit_blocks_after_max() {
         reset_money_rate_limiter();
@@ -227,8 +229,6 @@ mod tests {
     }
 
     #[test]
-    static ACCOUNTS_TRUSTED_PROXY_IPS: &str = "ACCOUNTS_TRUSTED_PROXY_IPS";
-
     fn extract_client_key_uses_peer_ip_when_untrusted() {
         let _lock = test_env_lock();
         std::env::remove_var(ACCOUNTS_TRUSTED_PROXY_IPS);
@@ -242,8 +242,6 @@ mod tests {
     }
 
     #[test]
-    static ACCOUNTS_TRUSTED_PROXY_IPS: &str = "ACCOUNTS_TRUSTED_PROXY_IPS";
-
     fn extract_client_key_uses_forwarded_ip_when_trusted() {
         let _lock = test_env_lock();
         std::env::set_var(ACCOUNTS_TRUSTED_PROXY_IPS, "127.0.0.1");
@@ -253,12 +251,10 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         req.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
-        assert_eq!(extract_client_key(&req, "ACCOUNTS_TRUSTED_PROXY_IPS"), "203.0.113.10");
+        assert_eq!(extract_client_key(&req, ACCOUNTS_TRUSTED_PROXY_IPS), "203.0.113.10");
     }
 
     #[test]
-    static ACCOUNTS_TRUSTED_PROXY_IPS: &str = "ACCOUNTS_TRUSTED_PROXY_IPS";
-
     fn extract_client_key_ignores_forwarded_ip_when_last_hop_untrusted() {
         let _lock = test_env_lock();
         std::env::set_var(ACCOUNTS_TRUSTED_PROXY_IPS, "127.0.0.1");

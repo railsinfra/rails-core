@@ -149,6 +149,8 @@ mod tests {
     use axum::http::Request;
     use std::time::Duration;
 
+    const USERS_TRUSTED_PROXY_IPS: &str = "USERS_TRUSTED_PROXY_IPS";
+
     #[test]
     fn rate_limit_window_resets_after_elapsed() {
         let limiter = RateLimiter::new(RateLimitConfig {
@@ -162,7 +164,6 @@ mod tests {
     }
 
     #[test]
-    static USERS_TRUSTED_PROXY_IPS: &str = "USERS_TRUSTED_PROXY_IPS";
     fn extract_client_key_trusted_proxy_falls_back_to_x_real_ip() {
         let _l = global_test_lock();
         std::env::set_var(USERS_TRUSTED_PROXY_IPS, "127.0.0.1");
@@ -175,7 +176,7 @@ mod tests {
             std::net::SocketAddr::from(([127, 0, 0, 1], 8080)),
         ));
         assert_eq!(
-            extract_client_key(&req, "USERS_TRUSTED_PROXY_IPS"),
+            extract_client_key(&req, USERS_TRUSTED_PROXY_IPS),
             "198.51.100.33"
         );
     }
@@ -207,12 +208,10 @@ mod tests {
             .header("x-real-ip", "not-an-ip")
             .body(Body::empty())
             .unwrap();
-        assert_eq!(extract_client_key(&req, "USERS_TRUSTED_PROXY_IPS"), "unknown");
+        assert_eq!(extract_client_key(&req, USERS_TRUSTED_PROXY_IPS), "unknown");
     }
 
     #[test]
-    static USERS_TRUSTED_PROXY_IPS: &str = "USERS_TRUSTED_PROXY_IPS";
-
     fn extract_client_key_falls_back_to_x_real_ip_without_connect_info() {
         let _l = global_test_lock();
         std::env::remove_var(USERS_TRUSTED_PROXY_IPS);
@@ -228,8 +227,6 @@ mod tests {
     }
 
     #[test]
-    static USERS_TRUSTED_PROXY_IPS: &str = "USERS_TRUSTED_PROXY_IPS";
-
     fn extract_client_key_returns_unknown_when_no_ip_hints() {
         let _l = global_test_lock();
         std::env::remove_var(USERS_TRUSTED_PROXY_IPS);
