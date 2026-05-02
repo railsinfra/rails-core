@@ -17,7 +17,7 @@ help:
 	@echo "  make reset-env  — clear DB URLs in .env (local only; keeps other keys)"
 	@echo "  make reset-neon — delete Neon project from .env (requires CONFIRM_PURGE_NEON=yes)"
 	@echo "  make seed       — placeholder (see script)"
-	@echo "  make k6-smoke   — k6 smoke (auto tenant + user→account→deposit); K6_TARGET=docker|staging|prod; see scripts/k6/README.md"
+	@echo "  make k6-smoke   — k6 smoke (native k6 or Docker grafana/k6); see scripts/k6/README.md"
 	@echo "  make k6-smore   — alias for k6-smoke"
 
 bootstrap:
@@ -51,7 +51,6 @@ reset-neon:
 	@bash "$(RAILS_CORE)scripts/reset.sh" --purge-neon
 
 k6-smoke: verify
-	@command -v k6 >/dev/null || (echo "Install k6: https://k6.io/docs/get-started/installation/" && exit 1)
 	@bash "$(RAILS_CORE)scripts/k6/run-smoke.sh"
 
 k6-smore: k6-smoke
