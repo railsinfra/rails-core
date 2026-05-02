@@ -37,7 +37,7 @@ use users_service::routes::business::{register_business, RegisterBusinessRequest
 use users_service::routes::password_reset::{
     request_password_reset, reset_password, RequestPasswordResetRequest, ResetPasswordRequest,
 };
-use users_service::routes::user::me;
+use users_service::routes::user::{create_sdk_user, me, CreateSdkUserRequest};
 use users_service::routes::{register_routes, AppState};
 use users_service::test_support::test_connect_info;
 
@@ -133,7 +133,7 @@ fn register_payload(email: &str, admin_password: &str) -> RegisterBusinessReques
 
 #[tokio::test]
 async fn db_init_succeeds_when_database_url_valid() {
-    let pool = match test_pool().await {
+    let _pool = match test_pool().await {
         Some(p) => p,
         None => {
             eprintln!("DATABASE_URL not set; skipping db_init_succeeds_when_database_url_valid.");
@@ -146,8 +146,6 @@ async fn db_init_succeeds_when_database_url_valid() {
         .fetch_one(&fresh)
         .await
         .expect("ping");
-    drop(fresh);
-    drop(pool);
 }
 
 #[tokio::test]
@@ -608,6 +606,191 @@ async fn beta_apply_conflict_on_duplicate_email() {
 }
 
 #[tokio::test]
+async fn sdk_create_user_via_api_key_login_duplicate_and_validation() {
+    let _lock = env_lock();
+    std::env::set_var(JWT_SECRET_ENV, "integration_test_jwt_secret");
+    std::env::set_var(API_KEY_HASH_SECRET_ENV, "integration_test_api_key_hash");
+
+    let pool = match test_pool().await {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "DATABASE_URL not set; skipping sdk_create_user_via_api_key_login_duplicate_and_validation."
+            );
+            return;
+        }
+    };
+
+    let admin_email = format!("admin+{}@example.com", Uuid::new_v4());
+    let admin_pw = unique_test_password();
+    let state = AppState {
+        db: pool.clone(),
+        grpc: grpc_none(),
+        email: None,
+    };
+
+    let _ = register_business(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        Json(register_payload(&admin_email, &admin_pw)),
+    )
+    .await
+    .expect("register_business");
+
+    let login_admin = login(
+        State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
+        Json(LoginRequest {
+            email: admin_email.clone(),
+            password: admin_pw.clone(),
+            environment_id: None,
+        }),
+    )
+    .await
+    .expect("login admin");
+    let access = login_admin.0.access_token.clone();
+    let sandbox_id = login_admin
+        .0
+        .environments
+        .iter()
+        .find(|e| e.r#type == "sandbox")
+        .expect("sandbox environment")
+        .id;
+
+    let mut jwt_parts = empty_request_parts();
+    jwt_parts.headers.insert(
+        header::AUTHORIZATION,
+        format!("Bearer {}", access).parse().unwrap(),
+    );
+    jwt_parts
+        .headers
+        .insert("x-environment-id", sandbox_id.to_string().parse().unwrap());
+    let ctx_admin = AuthContext::from_request_parts(&mut jwt_parts, &state)
+        .await
+        .expect("admin jwt context");
+
+    let key_resp = create_api_key(
+        State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
+        ctx_admin,
+        Json(CreateApiKeyRequest {
+            environment_id: Some(sandbox_id),
+        }),
+    )
+    .await
+    .expect("create_api_key");
+    let plain_key = key_resp.0.key.clone();
+
+    let mut parts = empty_request_parts();
+    parts
+        .headers
+        .insert("x-api-key", plain_key.parse().unwrap());
+    parts
+        .headers
+        .insert("x-environment", "sandbox".parse().unwrap());
+    let api_ctx = ApiKeyOnlyContext::from_request_parts(&mut parts, &state)
+        .await
+        .expect("api key only context");
+
+    let sdk_email = format!("sdk+{}@example.com", Uuid::new_v4());
+    let created = create_sdk_user(
+        State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
+        api_ctx.clone(),
+        Json(CreateSdkUserRequest {
+            email: sdk_email.clone(),
+            first_name: "Sam".into(),
+            last_name: "Sdk".into(),
+            password: "password123!".into(),
+        }),
+    )
+    .await
+    .expect("create sdk user");
+    assert_eq!(created.0.status, "active");
+    assert_ne!(created.0.user_id, Uuid::nil());
+
+    let _ = login(
+        State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
+        Json(LoginRequest {
+            email: sdk_email.clone(),
+            password: "password123!".into(),
+            environment_id: Some(sandbox_id),
+        }),
+    )
+    .await
+    .expect("sdk user login");
+
+    let dup = create_sdk_user(
+        State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
+        api_ctx.clone(),
+        Json(CreateSdkUserRequest {
+            email: sdk_email.clone(),
+            first_name: "Other".into(),
+            last_name: "Person".into(),
+            password: "password123!".into(),
+        }),
+    )
+    .await;
+    assert!(matches!(dup, Err(AppError::Conflict(_))));
+
+    let dup_admin = create_sdk_user(
+        State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
+        api_ctx.clone(),
+        Json(CreateSdkUserRequest {
+            email: admin_email.clone(),
+            first_name: "Dup".into(),
+            last_name: "Admin".into(),
+            password: "password123!".into(),
+        }),
+    )
+    .await;
+    assert!(matches!(dup_admin, Err(AppError::Conflict(_))));
+
+    let short_pw = create_sdk_user(
+        State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
+        api_ctx.clone(),
+        Json(CreateSdkUserRequest {
+            email: format!("short+{}@example.com", Uuid::new_v4()),
+            first_name: "A".into(),
+            last_name: "B".into(),
+            password: "short7!".into(),
+        }),
+    )
+    .await;
+    assert!(matches!(short_pw, Err(AppError::BadRequest(_))));
+
+    let empty_fn = create_sdk_user(
+        State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
+        api_ctx,
+        Json(CreateSdkUserRequest {
+            email: format!("fn+{}@example.com", Uuid::new_v4()),
+            first_name: "   ".into(),
+            last_name: "B".into(),
+            password: "password123!".into(),
+        }),
+    )
+    .await;
+    assert!(matches!(empty_fn, Err(AppError::BadRequest(_))));
+
+    std::env::remove_var(JWT_SECRET_ENV);
+    std::env::remove_var(API_KEY_HASH_SECRET_ENV);
+}
+
+#[tokio::test]
 async fn http_router_health_and_correlation_header() {
     let _lock = env_lock();
     std::env::set_var(JWT_SECRET_ENV, "integration_test_jwt_secret");
@@ -645,6 +828,25 @@ async fn http_router_health_and_correlation_header() {
     let bytes = to_bytes(api.into_body(), 1024 * 64).await.unwrap();
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert!(v.get("error").is_some() || v.get("message").is_some());
+
+    let mut users_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/users")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("x-environment", "sandbox")
+        .body(Body::from(
+            json!({
+                "email": "router+nokey@example.com",
+                "first_name": "A",
+                "last_name": "B",
+                "password": "password123!"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    users_req.extensions_mut().insert(ConnectInfo(peer));
+    let users = svc.ready().await.unwrap().call(users_req).await.unwrap();
+    assert_eq!(users.status(), StatusCode::UNAUTHORIZED);
 
     std::env::remove_var(JWT_SECRET_ENV);
 }
