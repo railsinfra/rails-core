@@ -624,6 +624,7 @@ async fn sdk_create_user_via_api_key_login_duplicate_and_validation() {
     };
 
     let admin_email = format!("admin+{}@example.com", Uuid::new_v4());
+    let admin_pw = unique_test_password();
     let state = AppState {
         db: pool.clone(),
         grpc: grpc_none(),
@@ -634,7 +635,7 @@ async fn sdk_create_user_via_api_key_login_duplicate_and_validation() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&admin_email)),
+        Json(register_payload(&admin_email, &admin_pw)),
     )
     .await
     .expect("register_business");
@@ -645,7 +646,7 @@ async fn sdk_create_user_via_api_key_login_duplicate_and_validation() {
         test_connect_info(),
         Json(LoginRequest {
             email: admin_email.clone(),
-            password: "password123!".into(),
+            password: admin_pw.clone(),
             environment_id: None,
         }),
     )
