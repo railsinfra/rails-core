@@ -116,14 +116,18 @@ fn empty_request_parts() -> axum::http::request::Parts {
         .0
 }
 
-fn register_payload(email: &str) -> RegisterBusinessRequest {
+fn unique_test_password() -> String {
+    format!("pw_{}", Uuid::new_v4())
+}
+
+fn register_payload(email: &str, admin_password: &str) -> RegisterBusinessRequest {
     RegisterBusinessRequest {
         name: format!("Co {}", Uuid::new_v4()),
         website: None,
         admin_first_name: "Admin".into(),
         admin_last_name: "User".into(),
         admin_email: email.to_string(),
-        admin_password: "password123!".into(),
+        admin_password: admin_password.into(),
     }
 }
 
@@ -161,6 +165,7 @@ async fn register_login_me_refresh_revoke_api_keys_and_grpc_validate() {
     };
 
     let email = format!("int+{}@example.com", Uuid::new_v4());
+    let password = unique_test_password();
     let state = AppState {
         db: pool.clone(),
         grpc: grpc_none(),
@@ -171,7 +176,7 @@ async fn register_login_me_refresh_revoke_api_keys_and_grpc_validate() {
         State(state.clone()),
         HeaderMap::new(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &password)),
     )
     .await
     .expect("register_business");
@@ -195,7 +200,7 @@ async fn register_login_me_refresh_revoke_api_keys_and_grpc_validate() {
         test_connect_info(),
         Json(LoginRequest {
             email: email.clone(),
-            password: "password123!".into(),
+            password: password.clone().into(),
             environment_id: None,
         }),
     )
@@ -468,7 +473,10 @@ async fn register_business_rejects_empty_admin_email() {
         grpc: grpc_none(),
         email: None,
     };
-    let mut req = register_payload(&format!("x+{}@example.com", Uuid::new_v4()));
+    let mut req = register_payload(
+        &format!("x+{}@example.com", Uuid::new_v4()),
+        &unique_test_password(),
+    );
     req.admin_email = "   ".into();
     let err = register_business(State(state), hdr_empty(), test_connect_info(), Json(req))
         .await
@@ -499,7 +507,7 @@ async fn password_reset_happy_and_failure_paths() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &unique_test_password())),
     )
     .await
     .expect("register");
@@ -545,7 +553,7 @@ async fn password_reset_happy_and_failure_paths() {
         test_connect_info(),
         Json(ResetPasswordRequest {
             token: "not-valid-token-xxxxxxxxxxxxxxxx".into(),
-            new_password: "longenough1!".into(),
+            new_password: format!("reject_token_{}", Uuid::new_v4()).into(),
         }),
     )
     .await;
@@ -847,7 +855,10 @@ async fn http_router_health_and_correlation_header() {
 #[tokio::test]
 async fn internal_service_token_blocks_sensitive_routes_when_configured() {
     let _lock = env_lock();
-    std::env::set_var(INTERNAL_SERVICE_TOKEN_ALLOWLIST_ENV, "secret-one,secret-two");
+    std::env::set_var(
+        INTERNAL_SERVICE_TOKEN_ALLOWLIST_ENV,
+        "integration_internal_token_a,integration_internal_token_b",
+    );
     std::env::set_var(JWT_SECRET_ENV, "integration_test_jwt_secret");
 
     let pool = match test_pool().await {
@@ -876,7 +887,7 @@ async fn internal_service_token_blocks_sensitive_routes_when_configured() {
         .method("POST")
         .uri("/api/v1/auth/login")
         .header(header::CONTENT_TYPE, "application/json")
-        .header("x-internal-service-token", "secret-one")
+        .header("x-internal-service-token", "integration_internal_token_a")
         .body(Body::from(
             json!({ "email": "x", "password": "y" }).to_string(),
         ))
@@ -901,6 +912,8 @@ async fn password_reset_completes_with_seeded_token() {
     };
 
     let email = format!("seed-reset+{}@example.com", Uuid::new_v4());
+    let initial_pw = unique_test_password();
+    let updated_pw = format!("updated_{}", Uuid::new_v4());
     let state = AppState {
         db: pool.clone(),
         grpc: grpc_none(),
@@ -910,7 +923,7 @@ async fn password_reset_completes_with_seeded_token() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &initial_pw)),
     )
     .await
     .expect("register");
@@ -949,7 +962,7 @@ async fn password_reset_completes_with_seeded_token() {
         test_connect_info(),
         Json(ResetPasswordRequest {
             token: raw_token.into(),
-            new_password: "newpassword1!".into(),
+            new_password: updated_pw.clone().into(),
         }),
     )
     .await
@@ -962,7 +975,7 @@ async fn password_reset_completes_with_seeded_token() {
         test_connect_info(),
         Json(LoginRequest {
             email,
-            password: "newpassword1!".into(),
+            password: updated_pw.into(),
             environment_id: None,
         }),
     )
@@ -986,6 +999,7 @@ async fn revoke_api_key_unknown_returns_bad_request() {
     };
 
     let email = format!("revunk+{}@example.com", Uuid::new_v4());
+    let password = unique_test_password();
     let state = AppState {
         db: pool.clone(),
         grpc: grpc_none(),
@@ -995,7 +1009,7 @@ async fn revoke_api_key_unknown_returns_bad_request() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &password)),
     )
     .await
     .expect("register");
@@ -1015,7 +1029,7 @@ async fn revoke_api_key_unknown_returns_bad_request() {
         test_connect_info(),
         Json(LoginRequest {
             email: email.clone(),
-            password: "password123!".into(),
+            password: password.clone().into(),
             environment_id: None,
         }),
     )
@@ -1064,6 +1078,7 @@ async fn create_api_key_forbidden_for_non_admin_member() {
     };
 
     let email = format!("memberkey+{}@example.com", Uuid::new_v4());
+    let password = unique_test_password();
     let state = AppState {
         db: pool.clone(),
         grpc: grpc_none(),
@@ -1073,7 +1088,7 @@ async fn create_api_key_forbidden_for_non_admin_member() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &password)),
     )
     .await
     .expect("register");
@@ -1117,7 +1132,7 @@ async fn create_api_key_forbidden_for_non_admin_member() {
         test_connect_info(),
         Json(LoginRequest {
             email: member_email,
-            password: "password123!".into(),
+            password: password.into(),
             environment_id: None,
         }),
     )
@@ -1202,7 +1217,7 @@ async fn password_reset_request_sends_resend_when_configured() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &unique_test_password())),
     )
     .await
     .expect("register");
@@ -1270,7 +1285,7 @@ async fn password_reset_request_logs_when_resend_returns_error() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &unique_test_password())),
     )
     .await
     .expect("register");
@@ -1305,6 +1320,7 @@ async fn login_refresh_revoke_paths_with_failing_audit_grpc() {
     let (grpc, join, shutdown_tx) = grpc_clients_with_failing_audit().await;
 
     let email = format!("failaudit+{}@example.com", Uuid::new_v4());
+    let password = unique_test_password();
     let state = AppState {
         db: pool.clone(),
         grpc,
@@ -1315,7 +1331,7 @@ async fn login_refresh_revoke_paths_with_failing_audit_grpc() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &password)),
     )
     .await
     .expect("register");
@@ -1326,7 +1342,7 @@ async fn login_refresh_revoke_paths_with_failing_audit_grpc() {
         test_connect_info(),
         Json(LoginRequest {
             email: email.clone(),
-            password: "password123!".into(),
+            password: password.clone().into(),
             environment_id: None,
         }),
     )
@@ -1412,6 +1428,7 @@ async fn login_falls_back_to_sandbox_when_requested_environment_id_unknown() {
     };
 
     let email = format!("envfallback+{}@example.com", Uuid::new_v4());
+    let password = unique_test_password();
     let state = AppState {
         db: pool,
         grpc: grpc_none(),
@@ -1421,7 +1438,7 @@ async fn login_falls_back_to_sandbox_when_requested_environment_id_unknown() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &password)),
     )
     .await
     .expect("register");
@@ -1432,7 +1449,7 @@ async fn login_falls_back_to_sandbox_when_requested_environment_id_unknown() {
         test_connect_info(),
         Json(LoginRequest {
             email: email.clone(),
-            password: "password123!".into(),
+            password: password.into(),
             environment_id: Some(Uuid::new_v4()),
         }),
     )
@@ -1464,6 +1481,7 @@ async fn jwt_auth_rejects_environment_not_in_business() {
     };
 
     let email = format!("jwtbadenv+{}@example.com", Uuid::new_v4());
+    let password = unique_test_password();
     let state = AppState {
         db: pool,
         grpc: grpc_none(),
@@ -1473,7 +1491,7 @@ async fn jwt_auth_rejects_environment_not_in_business() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &password)),
     )
     .await
     .expect("register");
@@ -1491,7 +1509,7 @@ async fn jwt_auth_rejects_environment_not_in_business() {
         test_connect_info(),
         Json(LoginRequest {
             email,
-            password: "password123!".into(),
+            password: password.into(),
             environment_id: None,
         }),
     )
@@ -1541,6 +1559,7 @@ async fn create_api_key_admin_success_with_failing_audit_grpc() {
     let (grpc, join, shutdown_tx) = grpc_clients_with_failing_audit().await;
 
     let email = format!("apikeyok+{}@example.com", Uuid::new_v4());
+    let password = unique_test_password();
     let state = AppState {
         db: pool.clone(),
         grpc,
@@ -1551,7 +1570,7 @@ async fn create_api_key_admin_success_with_failing_audit_grpc() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &password)),
     )
     .await
     .expect("register");
@@ -1569,7 +1588,7 @@ async fn create_api_key_admin_success_with_failing_audit_grpc() {
         test_connect_info(),
         Json(LoginRequest {
             email: email.clone(),
-            password: "password123!".into(),
+            password: password.into(),
             environment_id: None,
         }),
     )
@@ -1625,6 +1644,7 @@ async fn reset_password_success_with_failing_audit_grpc() {
     let (grpc, join, shutdown_tx) = grpc_clients_with_failing_audit().await;
 
     let email = format!("seedfail+{}@example.com", Uuid::new_v4());
+    let updated_pw = format!("updated_{}", Uuid::new_v4());
     let state = AppState {
         db: pool.clone(),
         grpc,
@@ -1634,7 +1654,7 @@ async fn reset_password_success_with_failing_audit_grpc() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &unique_test_password())),
     )
     .await
     .expect("register");
@@ -1673,7 +1693,7 @@ async fn reset_password_success_with_failing_audit_grpc() {
         test_connect_info(),
         Json(ResetPasswordRequest {
             token: raw_token.into(),
-            new_password: "newpassword1!".into(),
+            new_password: updated_pw.into(),
         }),
     )
     .await

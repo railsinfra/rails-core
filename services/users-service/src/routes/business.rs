@@ -286,7 +286,7 @@ mod tests {
             admin_first_name: "Admin".to_string(),
             admin_last_name: "User".to_string(),
             admin_email: admin_email.to_string(),
-            admin_password: "password123!".to_string(),
+            admin_password: format!("pw_{}", Uuid::new_v4()),
         }
     }
 
