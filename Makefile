@@ -1,5 +1,5 @@
 # Rails-core standalone repository Makefile.
-.PHONY: help dev bootstrap verify health test reset stop logs reset-env reset-neon seed
+.PHONY: help dev bootstrap verify health test reset stop logs reset-env reset-neon seed k6-smoke
 
 RAILS_CORE := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 REPO_ROOT := $(abspath $(RAILS_CORE))
@@ -17,6 +17,7 @@ help:
 	@echo "  make reset-env  — clear DB URLs in .env (local only; keeps other keys)"
 	@echo "  make reset-neon — delete Neon project from .env (requires CONFIRM_PURGE_NEON=yes)"
 	@echo "  make seed       — placeholder (see script)"
+	@echo "  make k6-smoke   — k6 smoke (user→account→deposit); needs k6 + K6_API_KEY (+ K6_ORGANIZATION_ID); see scripts/k6/README.md"
 
 bootstrap:
 	@bash "$(RAILS_CORE)scripts/bootstrap.sh"
@@ -47,6 +48,11 @@ reset-env:
 
 reset-neon:
 	@bash "$(RAILS_CORE)scripts/reset.sh" --purge-neon
+
+k6-smoke: verify
+	@test -n "$$K6_API_KEY" || (echo "Set K6_API_KEY (and usually K6_ORGANIZATION_ID). See scripts/k6/README.md" && exit 1)
+	@command -v k6 >/dev/null || (echo "Install k6: https://k6.io/docs/get-started/installation/" && exit 1)
+	@k6 run "$(RAILS_CORE)scripts/k6/smoke-user-account-money.js"
 
 dev: bootstrap
 	@test -f "$(RAILS_CORE).env" || (echo "Missing $(RAILS_CORE).env after bootstrap — see scripts/bootstrap.sh output." && exit 1)
