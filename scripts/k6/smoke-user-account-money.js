@@ -1,11 +1,9 @@
 /**
- * Smoke: one SDK user -> one checking account -> small deposit.
- * Maps accounts to users via user_id on POST /api/v1/accounts (legacy path).
+ * Smoke: auto-provision tenant (register + API key) → SDK user → account (user_id) → deposit.
  *
- * Run (from repo root, compose up, credentials exported):
- *   k6 run scripts/k6/smoke-user-account-money.js
+ * Run: `make k6-smoke` (loads repo `.env` for optional INTERNAL_SERVICE_TOKEN_ALLOWLIST token).
  */
-import { getConfig } from "./config.js";
+import { buildRuntimeConfig } from "./config.js";
 import { createSdkUser } from "./lib/users.js";
 import { createAccountForUser, deposit } from "./lib/accounts.js";
 
@@ -14,9 +12,11 @@ export const options = {
   iterations: 1,
 };
 
-const cfg = getConfig();
+export function setup() {
+  return buildRuntimeConfig();
+}
 
-export default function () {
+export default function (cfg) {
   const vu = __VU;
   const iter = __ITER;
   const email = `k6+vu${vu}+i${iter}+${Date.now()}@example.com`;
