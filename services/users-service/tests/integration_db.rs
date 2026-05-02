@@ -133,7 +133,7 @@ fn register_payload(email: &str, admin_password: &str) -> RegisterBusinessReques
 
 #[tokio::test]
 async fn db_init_succeeds_when_database_url_valid() {
-    let pool = match test_pool().await {
+    let _pool = match test_pool().await {
         Some(p) => p,
         None => {
             eprintln!("DATABASE_URL not set; skipping db_init_succeeds_when_database_url_valid.");
@@ -146,8 +146,6 @@ async fn db_init_succeeds_when_database_url_valid() {
         .fetch_one(&fresh)
         .await
         .expect("ping");
-    drop(fresh);
-    drop(pool);
 }
 
 #[tokio::test]
