@@ -10,6 +10,10 @@ import { createAccountForUser, deposit } from "./lib/accounts.js";
 export const options = {
   vus: 1,
   iterations: 1,
+  // Fail the process when checks fail (so `make k6-smoke` exits non-zero).
+  thresholds: {
+    checks: [{ threshold: "rate == 1", abortOnFail: true }],
+  },
 };
 
 export function setup() {

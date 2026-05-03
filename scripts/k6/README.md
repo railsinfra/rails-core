@@ -42,6 +42,22 @@ K6_INTERNAL_SERVICE_TOKEN=the-same-token-listed-in-the-allowlist
 
 The smoke script loads `.env` before k6 starts.
 
+## Troubleshooting
+
+### `create user 200` fails with HTTP **404** (empty body, `duration_ms: 0` in users-service logs)
+
+The request reached users-service but **no route matched**. With Compose, the service runs `cargo run --release` **once at container start**. If you changed Rust routes after the container started, the running binary can be **stale** until Cargo rebuilds. Fix:
+
+```bash
+docker compose restart users-service
+```
+
+Wait for `http://localhost:8080/users/health` again (rebuild may take a few minutes on first compile after a change).
+
+### `make k6-smoke` exits **0** even when checks show failures
+
+The smoke script sets a **checks** threshold so a failed scenario exits non-zero. Update k6 if you see old behavior.
+
 ## Optional: skip bootstrap (CI with secrets)
 
 ```bash
