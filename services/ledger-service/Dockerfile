@@ -1,4 +1,10 @@
 # syntax = docker/dockerfile:1
+#
+# Build context must be the **repository root** (rails-core), same contract as
+# `services/accounts-service/Dockerfile` and `services/users-service/Dockerfile`.
+# This allows Railway to clone the full monorepo (empty service root directory) and set:
+#   RAILWAY_DOCKERFILE_PATH=services/ledger-service/Dockerfile
+# (see https://docs.railway.app/builds/dockerfiles and Deploying a Monorepo).
 
 # Make sure RUBY_VERSION matches the Ruby version in .ruby-version and Gemfile
 ARG RUBY_VERSION=3.3.0
@@ -7,7 +13,6 @@ FROM ruby:$RUBY_VERSION-slim as base
 # Rails app lives here
 WORKDIR /rails
 
-# Set production environment
 ENV RAILS_ENV="production" \
     BUNDLE_DEPLOYMENT="1" \
     BUNDLE_PATH="/usr/local/bundle" \
@@ -28,12 +33,12 @@ RUN apt-get update -qq && \
     && rm -rf /var/lib/apt/lists/*
 
 # Install application gems
-COPY Gemfile Gemfile.lock ./
+COPY services/ledger-service/Gemfile services/ledger-service/Gemfile.lock ./
 RUN bundle install && \
     rm -rf ~/.bundle/ "${BUNDLE_PATH}"/ruby/*/cache "${BUNDLE_PATH}"/ruby/*/bundler/gems/*/.git
 
 # Copy application code
-COPY . .
+COPY services/ledger-service/ .
 
 
 # Final stage for app image
@@ -60,7 +65,6 @@ USER rails:rails
 # Entrypoint prepares the database.
 ENTRYPOINT ["/rails/bin/docker-entrypoint"]
 
-# Start the server by default, this can be overwritten at runtime
-# Expose both ports - Railway will map to the PORT env var (8082)
-EXPOSE 3000 8082
+# HTTP (Puma) + gRPC (GRPC_PORT / railway.toml ledger-grpc internalPort)
+EXPOSE 3000 9090
 CMD ["./bin/rails", "server"]
