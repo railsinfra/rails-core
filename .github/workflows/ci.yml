@@ -246,7 +246,7 @@ jobs:
       - name: Build image
         run: |
           if [ "${{ matrix.service }}" = "ledger-service" ]; then
-            docker build -f "services/ledger-service/Dockerfile" "services/ledger-service"
+            docker build -f "services/ledger-service/Dockerfile" .
           else
             # Rust services use path `../audit-service` and build.rs `../../proto`; context must be repo root.
             docker build -f "services/${{ matrix.service }}/Dockerfile" .
