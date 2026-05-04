@@ -53,6 +53,7 @@ deploy_accounts() {
   echo "  DATABASE_URL"
   echo "  PORT"
   echo "  GRPC_PORT"
+  echo "  LEDGER_GRPC_URL"
   echo "  HOST"
   echo "  RUST_LOG"
 }

@@ -17,7 +17,7 @@ pub async fn service_root() -> Json<serde_json::Value> {
 
 fn try_connect_ledger_grpc(endpoint: &str, timeout: Duration) -> bool {
     // Expect an HTTP/HTTPS-style endpoint (tonic Endpoint::from_shared),
-    // e.g. "http://127.0.0.1:50053"
+    // e.g. "http://127.0.0.1:9090"
     let without_scheme = endpoint
         .strip_prefix("http://")
         .or_else(|| endpoint.strip_prefix("https://"))

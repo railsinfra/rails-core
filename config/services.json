@@ -21,7 +21,7 @@
       "path": "services/ledger-service",
       "language": "ruby",
       "summary": "Double-entry ledger, financial finality",
-      "ports": { "http": 3000, "grpc": 50053 }
+      "ports": { "http": 3000, "grpc": 9090 }
     },
     {
       "id": "audit-service",
