@@ -2,7 +2,7 @@ class ApplicationController < ActionController::API
   def health
     # Health check should return 200 OK as long as Rails is running
     # gRPC status is informational only - don't fail health check if gRPC isn't ready yet
-    grpc_port = ENV.fetch('GRPC_PORT', 50053).to_i
+    grpc_port = ENV.fetch('GRPC_PORT', 9090).to_i
     grpc_status = 'unknown'
     
     begin

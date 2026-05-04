@@ -93,7 +93,7 @@ services:
       PORT: "8080"
       GRPC_PORT: "9090"
       USERS_GRPC_URL: http://users-service:50051
-      LEDGER_GRPC_URL: http://ledger-service:50053
+      LEDGER_GRPC_URL: http://ledger-service:9090
       AUDIT_GRPC_URL: http://audit-service:50054
       RUST_LOG: ${RUST_LOG:-info}
     command: bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y -qq protobuf-compiler && cargo run --release"
@@ -117,14 +117,14 @@ services:
       DATABASE_URL: ${LEDGER_DATABASE_URL}
       RAILS_ENV: development
       PORT: "3000"
-      GRPC_PORT: "50053"
+      GRPC_PORT: "9090"
       AUDIT_GRPC_URL: audit-service:50054
     # ledger-db may be empty after Neon bootstrap; create tables before gRPC/Puma.
     # tmp/pids/server.pid is on the host bind mount; a stale file (esp. pid 1) makes Rails exit "already running"
     command: bash -c "rm -f tmp/pids/server.pid && bundle install && bundle exec rails db:prepare && bundle exec rails server -b 0.0.0.0 -p 3000"
     expose:
       - "3000"
-      - "50053"
+      - "9090"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS --max-time 5 http://127.0.0.1:3000/health >/dev/null"]
       interval: 15s

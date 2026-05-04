@@ -1,0 +1,174 @@
+# Deploy Rust + Rails services to Railway when `develop` moves forward.
+# Workflows under `services/*/.github/workflows/` are not loaded by GitHub Actions; this root file is the source of truth.
+#
+# Requires: repository secret RAILWAY_TOKEN (Railway project token for the dev environment).
+# Deploy uses `railway up --service <name>` from the monorepo root (same layout as nested templates).
+name: Deploy Railway (dev)
+
+on:
+  push:
+    branches:
+      - develop
+
+concurrency:
+  group: railway-deploy-dev-${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  RUST_VERSION: stable
+  RUBY_VERSION: "3.3.0"
+
+jobs:
+  users-service:
+    name: users-service → Railway dev
+    runs-on: ubuntu-latest
+    environment: development
+    defaults:
+      run:
+        working-directory: services/users-service
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/users-service
+          save-if: ${{ github.ref == 'refs/heads/develop' }}
+      - run: cargo test --locked -- --include-ignored
+      - run: npm install -g @railway/cli
+      - name: railway up (users-service)
+        working-directory: ${{ github.workspace }}
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN secret is not set (GitHub → Settings → Secrets and variables → Actions). Use a Railway project token for the dev environment."
+            exit 1
+          fi
+          railway up --service users-service --detach
+
+  accounts-service:
+    name: accounts-service → Railway dev
+    runs-on: ubuntu-latest
+    environment: development
+    defaults:
+      run:
+        working-directory: services/accounts-service
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/accounts-service
+          save-if: ${{ github.ref == 'refs/heads/develop' }}
+      - run: cargo test --locked -- --include-ignored
+      - run: npm install -g @railway/cli
+      - name: railway up (accounts-service)
+        working-directory: ${{ github.workspace }}
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN secret is not set (GitHub → Settings → Secrets and variables → Actions). Use a Railway project token for the dev environment."
+            exit 1
+          fi
+          railway up --service accounts-service --detach
+
+  audit-service:
+    name: audit-service → Railway dev
+    runs-on: ubuntu-latest
+    environment: development
+    defaults:
+      run:
+        working-directory: services/audit-service
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/audit-service
+          save-if: ${{ github.ref == 'refs/heads/develop' }}
+      - run: cargo test --locked -- --include-ignored
+      - run: npm install -g @railway/cli
+      - name: railway up (audit-service)
+        working-directory: ${{ github.workspace }}
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN secret is not set (GitHub → Settings → Secrets and variables → Actions). Use a Railway project token for the dev environment."
+            exit 1
+          fi
+          set -euo pipefail
+          shopt -s nullglob
+          crates=( "${GITHUB_WORKSPACE}"/*/audit-service )
+          shopt -u nullglob
+          if [ "${#crates[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one */audit-service under the repository root."
+            exit 1
+          fi
+          cd "${crates[0]}"
+          railway up --detach
+
+  ledger-service:
+    name: ledger-service → Railway dev
+    runs-on: ubuntu-latest
+    environment: development
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ledger_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      RAILS_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ledger_test
+    defaults:
+      run:
+        working-directory: services/ledger-service
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ env.RUBY_VERSION }}
+          bundler-cache: true
+          working-directory: services/ledger-service
+      - run: bundle exec rails db:test:prepare test
+      - run: npm install -g @railway/cli
+      - name: railway up (ledger-service)
+        working-directory: ${{ github.workspace }}
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN secret is not set (GitHub → Settings → Secrets and variables → Actions). Use a Railway project token for the dev environment."
+            exit 1
+          fi
+          railway up --service ledger-service --detach
