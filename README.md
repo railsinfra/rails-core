@@ -178,7 +178,6 @@ rails-core/
 │   ├── reset.sh              # compose down; --clear-env / --purge-neon (see README)
 │   ├── verify-layout.sh
 │   ├── health-check.sh
-│   ├── deploy-railway.sh     # optional Railway helper (accounts, users, audit, ledger)
 │   └── lib/                  # neon_bootstrap.py, health_check.py, …
 │
 ├── infra/
@@ -189,8 +188,7 @@ rails-core/
 │   ├── architecture.md
 │   ├── audit-trail-architecture.md
 │   ├── quickstart.md
-│   ├── index.html
-│   └── RAILWAY_DEPLOYMENT.md
+│   └── index.html
 │
 ├── docker-compose.yml
 ├── Makefile
@@ -206,7 +204,6 @@ rails-core/
 - [docs/quickstart.md](docs/quickstart.md) — clone → env → `make dev`  
 - [docs/audit-trail-architecture.md](docs/audit-trail-architecture.md) — audit-service, gRPC ingest, dedicated database  
 - [services/audit-service/README.md](services/audit-service/README.md) — runbook for the audit microservice  
-- [docs/RAILWAY_DEPLOYMENT.md](docs/RAILWAY_DEPLOYMENT.md) — optional Railway helper for Rust services  
 - [CONTRIBUTING.md](CONTRIBUTING.md) — how to change code and open a PR  
 
 ## Service manifest
