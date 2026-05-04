@@ -178,7 +178,7 @@ rails-core/
 │   ├── reset.sh              # compose down; --clear-env / --purge-neon (see README)
 │   ├── verify-layout.sh
 │   ├── health-check.sh
-│   ├── deploy-railway.sh     # optional Railway helper (Rust services)
+│   ├── deploy-railway.sh     # optional Railway helper (accounts, users, audit, ledger)
 │   └── lib/                  # neon_bootstrap.py, health_check.py, …
 │
 ├── infra/
