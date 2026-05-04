@@ -2,9 +2,8 @@
 #
 # Build context must be the **repository root** (rails-core), same contract as
 # `services/accounts-service/Dockerfile` and `services/users-service/Dockerfile`.
-# This allows Railway to clone the full monorepo (empty service root directory) and set:
-#   RAILWAY_DOCKERFILE_PATH=services/ledger-service/Dockerfile
-# (see https://docs.railway.app/builds/dockerfiles and Deploying a Monorepo).
+# CI and image builds pass `-f services/ledger-service/Dockerfile` with the repo root as
+# context so `COPY services/ledger-service/...` paths resolve.
 
 # Make sure RUBY_VERSION matches the Ruby version in .ruby-version and Gemfile
 ARG RUBY_VERSION=3.3.0
@@ -65,6 +64,6 @@ USER rails:rails
 # Entrypoint prepares the database.
 ENTRYPOINT ["/rails/bin/docker-entrypoint"]
 
-# HTTP (Puma) + gRPC (GRPC_PORT / railway.toml ledger-grpc internalPort)
+# HTTP (Puma) + gRPC (GRPC_PORT; default 9090 in app config)
 EXPOSE 3000 9090
 CMD ["./bin/rails", "server"]
