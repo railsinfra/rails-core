@@ -1,13 +1,13 @@
-# Monorepo copy of per-service `services/*/.github/workflows/deploy-dev.yml` (same test → deploy shape).
+# Monorepo copy of per-service `services/*/.github/workflows/deploy-production.yml`.
 # Nested `.github/` under `services/` is not executed by GitHub Actions for this repository.
 #
-# Requires: RAILWAY_TOKEN on GitHub environment `development` (Railway project token for dev).
-name: Deploy to Railway Dev
+# Requires: RAILWAY_TOKEN on GitHub environment `production` (Railway project token for production).
+name: Test and Deploy to Production
 
 on:
   push:
     branches:
-      - develop
+      - main
 
 env:
   RUST_VERSION: stable
@@ -35,18 +35,18 @@ jobs:
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: deploy-dev-accounts-service
+          shared-key: deploy-production-accounts-service
           workspaces: services/accounts-service
 
       - name: Run tests
         run: cargo test
 
   accounts-service-deploy:
-    name: accounts-service / Deploy to Railway Dev
+    name: accounts-service / Deploy to Railway Production
     runs-on: ubuntu-latest
     needs: accounts-service-test
     if: success()
-    environment: development
+    environment: production
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -56,13 +56,13 @@ jobs:
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      - name: Deploy to Railway Dev
+      - name: Deploy to Railway Production
         working-directory: ${{ github.workspace }}
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           if [ -z "$RAILWAY_TOKEN" ]; then
-            echo "::error::RAILWAY_TOKEN secret is not set. Add it in repo Settings → Secrets and variables → Actions. Create token in Railway project → Settings → Tokens (dev environment)."
+            echo "::error::RAILWAY_TOKEN not set for production. Add it in Settings → Environments → production → Environment secrets (Railway project token for production)."
             exit 1
           fi
           railway up --service accounts-service --detach
@@ -88,18 +88,19 @@ jobs:
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: deploy-dev-users-service
+          shared-key: deploy-production-users-service
           workspaces: services/users-service
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run tests
         run: cargo test
 
   users-service-deploy:
-    name: users-service / Deploy to Railway Dev
+    name: users-service / Deploy to Railway Production
     runs-on: ubuntu-latest
     needs: users-service-test
     if: success()
-    environment: development
+    environment: production
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -109,13 +110,13 @@ jobs:
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      - name: Deploy to Railway Dev
+      - name: Deploy to Railway Production
         working-directory: ${{ github.workspace }}
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           if [ -z "$RAILWAY_TOKEN" ]; then
-            echo "::error::RAILWAY_TOKEN secret is not set. Add it in repo Settings → Secrets and variables → Actions. Create token in Railway project → Settings → Tokens (dev environment)."
+            echo "::error::RAILWAY_TOKEN not set for production. Add it in Settings → Environments → production → Environment secrets (Railway project token for production)."
             exit 1
           fi
           railway up --service users-service --detach
@@ -141,18 +142,18 @@ jobs:
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: deploy-dev-audit-service
+          shared-key: deploy-production-audit-service
           workspaces: services/audit-service
 
       - name: Run tests
         run: cargo test
 
   audit-service-deploy:
-    name: audit-service / Deploy to Railway Dev
+    name: audit-service / Deploy to Railway Production
     runs-on: ubuntu-latest
     needs: audit-service-test
     if: success()
-    environment: development
+    environment: production
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -162,13 +163,13 @@ jobs:
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      - name: Deploy to Railway Dev
+      - name: Deploy to Railway Production
         working-directory: ${{ github.workspace }}
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           if [ -z "$RAILWAY_TOKEN" ]; then
-            echo "::error::RAILWAY_TOKEN secret is not set. Add it in repo Settings → Secrets and variables → Actions. Create token in Railway project → Settings → Tokens (dev environment)."
+            echo "::error::RAILWAY_TOKEN not set for production. Add it in Settings → Environments → production → Environment secrets (Railway project token for production)."
             exit 1
           fi
           railway up --service audit-service --detach
@@ -214,11 +215,11 @@ jobs:
         run: bundle exec rails test
 
   ledger-service-deploy:
-    name: ledger-service / Deploy to Railway Dev
+    name: ledger-service / Deploy to Railway Production
     runs-on: ubuntu-latest
     needs: ledger-service-test
     if: success()
-    environment: development
+    environment: production
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -228,13 +229,13 @@ jobs:
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      - name: Deploy to Railway Dev
+      - name: Deploy to Railway Production
         working-directory: ${{ github.workspace }}
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           if [ -z "$RAILWAY_TOKEN" ]; then
-            echo "::error::RAILWAY_TOKEN secret is not set. Add it in repo Settings → Secrets and variables → Actions. Create token in Railway project → Settings → Tokens (dev environment)."
+            echo "::error::RAILWAY_TOKEN not set for production. Add it in Settings → Environments → production → Environment secrets (Railway project token for production)."
             exit 1
           fi
           railway up --service ledger-service --detach
