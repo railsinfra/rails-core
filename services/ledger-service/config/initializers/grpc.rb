@@ -54,7 +54,7 @@ if (Rails.env.development? || Rails.env.production?) && should_start_grpc
 
     Thread.new do
       begin
-        grpc_port = ENV.fetch('GRPC_PORT', 9090).to_i
+        grpc_port = ENV.fetch('GRPC_PORT', 50053).to_i
         server = GRPC::RpcServer.new
         server.add_http2_port("0.0.0.0:#{grpc_port}", :this_port_is_insecure)
         server.handle(LedgerService.new)

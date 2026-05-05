@@ -25,7 +25,6 @@ From `services/accounts-service`:
   - `DATABASE_URL`
   - `PORT`
   - `GRPC_PORT`
-  - `LEDGER_GRPC_URL` (ledger **gRPC** URL, e.g. `http://<ledger-grpc host>.railway.internal:9090` on private networking—not the Rails HTTP URL)
   - `HOST`
   - `RUST_LOG`
 
@@ -49,7 +48,7 @@ From `services/ledger-service`:
 - Deploy service
 - Set variables:
   - `DATABASE_URL`
-  - `GRPC_PORT` — defaults to **9090** in-app, matching **`ledger-grpc` `internalPort`** in `railway.toml`. Set only if you change that port.
+  - `GRPC_PORT`
   - `RAILS_ENV`
   - `LOG_LEVEL`
 
