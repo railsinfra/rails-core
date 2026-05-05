@@ -41,6 +41,8 @@ audit-service/
 │   └── routes/              # HTTP routes (health)
 ├── migrations/              # SQL migrations (audit_events)
 ├── tests/                   # Integration tests (e.g. Postgres + gRPC E2E)
+├── Dockerfile               # Docker / Railway (repo root context; see CI docker-builds)
+├── railway.toml             # Railway config-as-code (optional; path from repo root in monorepo UI)
 ├── build.rs                 # Protobuf build (shared repo proto)
 ├── Cargo.toml
 └── README.md                # This file
