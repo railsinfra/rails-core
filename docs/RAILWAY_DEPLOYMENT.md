@@ -14,32 +14,6 @@ This guide covers deploying the MVP services to Railway using **gRPC** for inter
 - Railway CLI installed + authenticated
 - Neon database connection strings ready
 
-## Monorepo builds (avoid Railpack “could not determine how to build”)
-
-`rails-core` is a **monorepo**: Dockerfiles live under `services/<name>/`, but Railway often clones the **whole repo** with an **empty “Root Directory”**. In that mode Railpack runs at the repo root, skips nested Dockerfiles, and fails.
-
-Pick **one** approach per service:
-
-### A) Service variable `RAILWAY_DOCKERFILE_PATH` (full repo checkout)
-
-Set on each Railway service (Variables), paths relative to repo root:
-
-| Service | `RAILWAY_DOCKERFILE_PATH` |
-|---------|---------------------------|
-| accounts-service | `services/accounts-service/Dockerfile` |
-| users-service | `services/users-service/Dockerfile` |
-| ledger-service | `services/ledger-service/Dockerfile` |
-
-Then set **Builder** to **Dockerfile** (disable Railpack auto-detect if the UI offers it). Build context remains the **repository root**, which matches these Dockerfiles.
-
-**audit-service** today uses a **crate-local** Dockerfile (`COPY Cargo.toml` from context root). For Railway, either set the service **Root Directory** to `services/audit-service` (isolated monorepo), or refactor that Dockerfile to repo-root context later.
-
-### B) Root directory per service (isolated monorepo)
-
-In Railway → service → **Settings → Root Directory**, set e.g. `services/<service>`. Railway then uses that folder as the build context; only use this if the service’s Dockerfile is written for that **narrow** context. The **ledger** Dockerfile in this repo expects the **monorepo root**—use **A** for ledger unless you maintain a separate crate-local Dockerfile.
-
-Official reference: [Deploying an isolated monorepo](https://docs.railway.app/deployments/monorepo), [Dockerfiles](https://docs.railway.app/builds/dockerfiles).
-
 ## Deploy
 
 ### 1) Deploy Accounts Service
