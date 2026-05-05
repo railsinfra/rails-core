@@ -163,7 +163,7 @@ pub async fn list_transactions(
 
     // Parse and validate pagination params with defaults
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(10).min(100).max(1);
+    let per_page = query.per_page.unwrap_or(10).clamp(1, 100);
 
     let (transactions, pagination) = TransactionService::get_transactions_by_organization_paginated(
         &state.pool,

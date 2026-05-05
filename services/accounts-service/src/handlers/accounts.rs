@@ -298,7 +298,7 @@ pub async fn list_accounts(
 
     // Parse and validate pagination params with defaults
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(10).min(100).max(1);
+    let per_page = query.per_page.unwrap_or(10).clamp(1, 100);
 
     // Support three filtering options:
     // 1. user_id: Get accounts owned by a specific user

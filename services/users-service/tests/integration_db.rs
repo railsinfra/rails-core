@@ -37,7 +37,7 @@ use users_service::routes::business::{register_business, RegisterBusinessRequest
 use users_service::routes::password_reset::{
     request_password_reset, reset_password, RequestPasswordResetRequest, ResetPasswordRequest,
 };
-use users_service::routes::user::me;
+use users_service::routes::user::{create_sdk_user, me, CreateSdkUserRequest};
 use users_service::routes::{register_routes, AppState};
 use users_service::test_support::test_connect_info;
 
@@ -116,20 +116,24 @@ fn empty_request_parts() -> axum::http::request::Parts {
         .0
 }
 
-fn register_payload(email: &str) -> RegisterBusinessRequest {
+fn unique_test_password() -> String {
+    format!("pw_{}", Uuid::new_v4())
+}
+
+fn register_payload(email: &str, admin_password: &str) -> RegisterBusinessRequest {
     RegisterBusinessRequest {
         name: format!("Co {}", Uuid::new_v4()),
         website: None,
         admin_first_name: "Admin".into(),
         admin_last_name: "User".into(),
         admin_email: email.to_string(),
-        admin_password: "password123!".into(),
+        admin_password: admin_password.into(),
     }
 }
 
 #[tokio::test]
 async fn db_init_succeeds_when_database_url_valid() {
-    let pool = match test_pool().await {
+    let _pool = match test_pool().await {
         Some(p) => p,
         None => {
             eprintln!("DATABASE_URL not set; skipping db_init_succeeds_when_database_url_valid.");
@@ -142,8 +146,6 @@ async fn db_init_succeeds_when_database_url_valid() {
         .fetch_one(&fresh)
         .await
         .expect("ping");
-    drop(fresh);
-    drop(pool);
 }
 
 #[tokio::test]
@@ -161,6 +163,7 @@ async fn register_login_me_refresh_revoke_api_keys_and_grpc_validate() {
     };
 
     let email = format!("int+{}@example.com", Uuid::new_v4());
+    let password = unique_test_password();
     let state = AppState {
         db: pool.clone(),
         grpc: grpc_none(),
@@ -171,7 +174,7 @@ async fn register_login_me_refresh_revoke_api_keys_and_grpc_validate() {
         State(state.clone()),
         HeaderMap::new(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &password)),
     )
     .await
     .expect("register_business");
@@ -195,7 +198,7 @@ async fn register_login_me_refresh_revoke_api_keys_and_grpc_validate() {
         test_connect_info(),
         Json(LoginRequest {
             email: email.clone(),
-            password: "password123!".into(),
+            password: password.clone().into(),
             environment_id: None,
         }),
     )
@@ -468,7 +471,10 @@ async fn register_business_rejects_empty_admin_email() {
         grpc: grpc_none(),
         email: None,
     };
-    let mut req = register_payload(&format!("x+{}@example.com", Uuid::new_v4()));
+    let mut req = register_payload(
+        &format!("x+{}@example.com", Uuid::new_v4()),
+        &unique_test_password(),
+    );
     req.admin_email = "   ".into();
     let err = register_business(State(state), hdr_empty(), test_connect_info(), Json(req))
         .await
@@ -499,7 +505,7 @@ async fn password_reset_happy_and_failure_paths() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &unique_test_password())),
     )
     .await
     .expect("register");
@@ -545,7 +551,7 @@ async fn password_reset_happy_and_failure_paths() {
         test_connect_info(),
         Json(ResetPasswordRequest {
             token: "not-valid-token-xxxxxxxxxxxxxxxx".into(),
-            new_password: "longenough1!".into(),
+            new_password: format!("reject_token_{}", Uuid::new_v4()).into(),
         }),
     )
     .await;
@@ -600,6 +606,191 @@ async fn beta_apply_conflict_on_duplicate_email() {
 }
 
 #[tokio::test]
+async fn sdk_create_user_via_api_key_login_duplicate_and_validation() {
+    let _lock = env_lock();
+    std::env::set_var(JWT_SECRET_ENV, "integration_test_jwt_secret");
+    std::env::set_var(API_KEY_HASH_SECRET_ENV, "integration_test_api_key_hash");
+
+    let pool = match test_pool().await {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "DATABASE_URL not set; skipping sdk_create_user_via_api_key_login_duplicate_and_validation."
+            );
+            return;
+        }
+    };
+
+    let admin_email = format!("admin+{}@example.com", Uuid::new_v4());
+    let admin_pw = unique_test_password();
+    let state = AppState {
+        db: pool.clone(),
+        grpc: grpc_none(),
+        email: None,
+    };
+
+    let _ = register_business(
+        State(state.clone()),
+        hdr_empty(),
+        test_connect_info(),
+        Json(register_payload(&admin_email, &admin_pw)),
+    )
+    .await
+    .expect("register_business");
+
+    let login_admin = login(
+        State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
+        Json(LoginRequest {
+            email: admin_email.clone(),
+            password: admin_pw.clone(),
+            environment_id: None,
+        }),
+    )
+    .await
+    .expect("login admin");
+    let access = login_admin.0.access_token.clone();
+    let sandbox_id = login_admin
+        .0
+        .environments
+        .iter()
+        .find(|e| e.r#type == "sandbox")
+        .expect("sandbox environment")
+        .id;
+
+    let mut jwt_parts = empty_request_parts();
+    jwt_parts.headers.insert(
+        header::AUTHORIZATION,
+        format!("Bearer {}", access).parse().unwrap(),
+    );
+    jwt_parts
+        .headers
+        .insert("x-environment-id", sandbox_id.to_string().parse().unwrap());
+    let ctx_admin = AuthContext::from_request_parts(&mut jwt_parts, &state)
+        .await
+        .expect("admin jwt context");
+
+    let key_resp = create_api_key(
+        State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
+        ctx_admin,
+        Json(CreateApiKeyRequest {
+            environment_id: Some(sandbox_id),
+        }),
+    )
+    .await
+    .expect("create_api_key");
+    let plain_key = key_resp.0.key.clone();
+
+    let mut parts = empty_request_parts();
+    parts
+        .headers
+        .insert("x-api-key", plain_key.parse().unwrap());
+    parts
+        .headers
+        .insert("x-environment", "sandbox".parse().unwrap());
+    let api_ctx = ApiKeyOnlyContext::from_request_parts(&mut parts, &state)
+        .await
+        .expect("api key only context");
+
+    let sdk_email = format!("sdk+{}@example.com", Uuid::new_v4());
+    let created = create_sdk_user(
+        State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
+        api_ctx.clone(),
+        Json(CreateSdkUserRequest {
+            email: sdk_email.clone(),
+            first_name: "Sam".into(),
+            last_name: "Sdk".into(),
+            password: "password123!".into(),
+        }),
+    )
+    .await
+    .expect("create sdk user");
+    assert_eq!(created.0.status, "active");
+    assert_ne!(created.0.user_id, Uuid::nil());
+
+    let _ = login(
+        State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
+        Json(LoginRequest {
+            email: sdk_email.clone(),
+            password: "password123!".into(),
+            environment_id: Some(sandbox_id),
+        }),
+    )
+    .await
+    .expect("sdk user login");
+
+    let dup = create_sdk_user(
+        State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
+        api_ctx.clone(),
+        Json(CreateSdkUserRequest {
+            email: sdk_email.clone(),
+            first_name: "Other".into(),
+            last_name: "Person".into(),
+            password: "password123!".into(),
+        }),
+    )
+    .await;
+    assert!(matches!(dup, Err(AppError::Conflict(_))));
+
+    let dup_admin = create_sdk_user(
+        State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
+        api_ctx.clone(),
+        Json(CreateSdkUserRequest {
+            email: admin_email.clone(),
+            first_name: "Dup".into(),
+            last_name: "Admin".into(),
+            password: "password123!".into(),
+        }),
+    )
+    .await;
+    assert!(matches!(dup_admin, Err(AppError::Conflict(_))));
+
+    let short_pw = create_sdk_user(
+        State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
+        api_ctx.clone(),
+        Json(CreateSdkUserRequest {
+            email: format!("short+{}@example.com", Uuid::new_v4()),
+            first_name: "A".into(),
+            last_name: "B".into(),
+            password: "short7!".into(),
+        }),
+    )
+    .await;
+    assert!(matches!(short_pw, Err(AppError::BadRequest(_))));
+
+    let empty_fn = create_sdk_user(
+        State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
+        api_ctx,
+        Json(CreateSdkUserRequest {
+            email: format!("fn+{}@example.com", Uuid::new_v4()),
+            first_name: "   ".into(),
+            last_name: "B".into(),
+            password: "password123!".into(),
+        }),
+    )
+    .await;
+    assert!(matches!(empty_fn, Err(AppError::BadRequest(_))));
+
+    std::env::remove_var(JWT_SECRET_ENV);
+    std::env::remove_var(API_KEY_HASH_SECRET_ENV);
+}
+
+#[tokio::test]
 async fn http_router_health_and_correlation_header() {
     let _lock = env_lock();
     std::env::set_var(JWT_SECRET_ENV, "integration_test_jwt_secret");
@@ -638,13 +829,35 @@ async fn http_router_health_and_correlation_header() {
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert!(v.get("error").is_some() || v.get("message").is_some());
 
+    let mut users_req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/users")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("x-environment", "sandbox")
+        .body(Body::from(
+            json!({
+                "email": "router+nokey@example.com",
+                "first_name": "A",
+                "last_name": "B",
+                "password": "password123!"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    users_req.extensions_mut().insert(ConnectInfo(peer));
+    let users = svc.ready().await.unwrap().call(users_req).await.unwrap();
+    assert_eq!(users.status(), StatusCode::UNAUTHORIZED);
+
     std::env::remove_var(JWT_SECRET_ENV);
 }
 
 #[tokio::test]
 async fn internal_service_token_blocks_sensitive_routes_when_configured() {
     let _lock = env_lock();
-    std::env::set_var(INTERNAL_SERVICE_TOKEN_ALLOWLIST_ENV, "secret-one,secret-two");
+    std::env::set_var(
+        INTERNAL_SERVICE_TOKEN_ALLOWLIST_ENV,
+        "integration_internal_token_a,integration_internal_token_b",
+    );
     std::env::set_var(JWT_SECRET_ENV, "integration_test_jwt_secret");
 
     let pool = match test_pool().await {
@@ -673,7 +886,7 @@ async fn internal_service_token_blocks_sensitive_routes_when_configured() {
         .method("POST")
         .uri("/api/v1/auth/login")
         .header(header::CONTENT_TYPE, "application/json")
-        .header("x-internal-service-token", "secret-one")
+        .header("x-internal-service-token", "integration_internal_token_a")
         .body(Body::from(
             json!({ "email": "x", "password": "y" }).to_string(),
         ))
@@ -698,6 +911,8 @@ async fn password_reset_completes_with_seeded_token() {
     };
 
     let email = format!("seed-reset+{}@example.com", Uuid::new_v4());
+    let initial_pw = unique_test_password();
+    let updated_pw = format!("updated_{}", Uuid::new_v4());
     let state = AppState {
         db: pool.clone(),
         grpc: grpc_none(),
@@ -707,7 +922,7 @@ async fn password_reset_completes_with_seeded_token() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &initial_pw)),
     )
     .await
     .expect("register");
@@ -746,7 +961,7 @@ async fn password_reset_completes_with_seeded_token() {
         test_connect_info(),
         Json(ResetPasswordRequest {
             token: raw_token.into(),
-            new_password: "newpassword1!".into(),
+            new_password: updated_pw.clone().into(),
         }),
     )
     .await
@@ -759,7 +974,7 @@ async fn password_reset_completes_with_seeded_token() {
         test_connect_info(),
         Json(LoginRequest {
             email,
-            password: "newpassword1!".into(),
+            password: updated_pw.into(),
             environment_id: None,
         }),
     )
@@ -783,6 +998,7 @@ async fn revoke_api_key_unknown_returns_bad_request() {
     };
 
     let email = format!("revunk+{}@example.com", Uuid::new_v4());
+    let password = unique_test_password();
     let state = AppState {
         db: pool.clone(),
         grpc: grpc_none(),
@@ -792,7 +1008,7 @@ async fn revoke_api_key_unknown_returns_bad_request() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &password)),
     )
     .await
     .expect("register");
@@ -812,7 +1028,7 @@ async fn revoke_api_key_unknown_returns_bad_request() {
         test_connect_info(),
         Json(LoginRequest {
             email: email.clone(),
-            password: "password123!".into(),
+            password: password.clone().into(),
             environment_id: None,
         }),
     )
@@ -861,6 +1077,7 @@ async fn create_api_key_forbidden_for_non_admin_member() {
     };
 
     let email = format!("memberkey+{}@example.com", Uuid::new_v4());
+    let password = unique_test_password();
     let state = AppState {
         db: pool.clone(),
         grpc: grpc_none(),
@@ -870,7 +1087,7 @@ async fn create_api_key_forbidden_for_non_admin_member() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &password)),
     )
     .await
     .expect("register");
@@ -914,7 +1131,7 @@ async fn create_api_key_forbidden_for_non_admin_member() {
         test_connect_info(),
         Json(LoginRequest {
             email: member_email,
-            password: "password123!".into(),
+            password: password.into(),
             environment_id: None,
         }),
     )
@@ -999,7 +1216,7 @@ async fn password_reset_request_sends_resend_when_configured() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &unique_test_password())),
     )
     .await
     .expect("register");
@@ -1067,7 +1284,7 @@ async fn password_reset_request_logs_when_resend_returns_error() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &unique_test_password())),
     )
     .await
     .expect("register");
@@ -1102,6 +1319,7 @@ async fn login_refresh_revoke_paths_with_failing_audit_grpc() {
     let (grpc, join, shutdown_tx) = grpc_clients_with_failing_audit().await;
 
     let email = format!("failaudit+{}@example.com", Uuid::new_v4());
+    let password = unique_test_password();
     let state = AppState {
         db: pool.clone(),
         grpc,
@@ -1112,7 +1330,7 @@ async fn login_refresh_revoke_paths_with_failing_audit_grpc() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &password)),
     )
     .await
     .expect("register");
@@ -1123,7 +1341,7 @@ async fn login_refresh_revoke_paths_with_failing_audit_grpc() {
         test_connect_info(),
         Json(LoginRequest {
             email: email.clone(),
-            password: "password123!".into(),
+            password: password.clone().into(),
             environment_id: None,
         }),
     )
@@ -1209,6 +1427,7 @@ async fn login_falls_back_to_sandbox_when_requested_environment_id_unknown() {
     };
 
     let email = format!("envfallback+{}@example.com", Uuid::new_v4());
+    let password = unique_test_password();
     let state = AppState {
         db: pool,
         grpc: grpc_none(),
@@ -1218,7 +1437,7 @@ async fn login_falls_back_to_sandbox_when_requested_environment_id_unknown() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &password)),
     )
     .await
     .expect("register");
@@ -1229,7 +1448,7 @@ async fn login_falls_back_to_sandbox_when_requested_environment_id_unknown() {
         test_connect_info(),
         Json(LoginRequest {
             email: email.clone(),
-            password: "password123!".into(),
+            password: password.into(),
             environment_id: Some(Uuid::new_v4()),
         }),
     )
@@ -1261,6 +1480,7 @@ async fn jwt_auth_rejects_environment_not_in_business() {
     };
 
     let email = format!("jwtbadenv+{}@example.com", Uuid::new_v4());
+    let password = unique_test_password();
     let state = AppState {
         db: pool,
         grpc: grpc_none(),
@@ -1270,7 +1490,7 @@ async fn jwt_auth_rejects_environment_not_in_business() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &password)),
     )
     .await
     .expect("register");
@@ -1288,7 +1508,7 @@ async fn jwt_auth_rejects_environment_not_in_business() {
         test_connect_info(),
         Json(LoginRequest {
             email,
-            password: "password123!".into(),
+            password: password.into(),
             environment_id: None,
         }),
     )
@@ -1338,6 +1558,7 @@ async fn create_api_key_admin_success_with_failing_audit_grpc() {
     let (grpc, join, shutdown_tx) = grpc_clients_with_failing_audit().await;
 
     let email = format!("apikeyok+{}@example.com", Uuid::new_v4());
+    let password = unique_test_password();
     let state = AppState {
         db: pool.clone(),
         grpc,
@@ -1348,7 +1569,7 @@ async fn create_api_key_admin_success_with_failing_audit_grpc() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &password)),
     )
     .await
     .expect("register");
@@ -1366,7 +1587,7 @@ async fn create_api_key_admin_success_with_failing_audit_grpc() {
         test_connect_info(),
         Json(LoginRequest {
             email: email.clone(),
-            password: "password123!".into(),
+            password: password.into(),
             environment_id: None,
         }),
     )
@@ -1422,6 +1643,7 @@ async fn reset_password_success_with_failing_audit_grpc() {
     let (grpc, join, shutdown_tx) = grpc_clients_with_failing_audit().await;
 
     let email = format!("seedfail+{}@example.com", Uuid::new_v4());
+    let updated_pw = format!("updated_{}", Uuid::new_v4());
     let state = AppState {
         db: pool.clone(),
         grpc,
@@ -1431,7 +1653,7 @@ async fn reset_password_success_with_failing_audit_grpc() {
         State(state.clone()),
         hdr_empty(),
         test_connect_info(),
-        Json(register_payload(&email)),
+        Json(register_payload(&email, &unique_test_password())),
     )
     .await
     .expect("register");
@@ -1470,7 +1692,7 @@ async fn reset_password_success_with_failing_audit_grpc() {
         test_connect_info(),
         Json(ResetPasswordRequest {
             token: raw_token.into(),
-            new_password: "newpassword1!".into(),
+            new_password: updated_pw.into(),
         }),
     )
     .await
