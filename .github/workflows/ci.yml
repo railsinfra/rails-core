@@ -244,4 +244,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build image
-        run: docker build -f "services/${{ matrix.service }}/Dockerfile" "services/${{ matrix.service }}"
+        working-directory: services/${{ matrix.service }}
+        run: docker build -t "${{ matrix.service }}:ci" .

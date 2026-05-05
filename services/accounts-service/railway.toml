@@ -7,12 +7,3 @@ healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
-
-[[services]]
-name = "accounts-service"
-internalPort = 8081
-
-[[services]]
-name = "accounts-grpc"
-internalPort = 9090
-protocol = "grpc"

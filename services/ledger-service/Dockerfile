@@ -1,6 +1,6 @@
 # syntax = docker/dockerfile:1
 #
-# Build context: this directory (`services/ledger-service`).
+# Build context: this directory (the Rails app / crate root).
 # Use: `docker build .` here, or Railway with Root Directory = this folder.
 
 # Make sure RUBY_VERSION matches the Ruby version in .ruby-version and Gemfile

@@ -1,4 +1,4 @@
-# Build context: this directory (`services/users-service`).
+# Build context: this directory (the crate root).
 # Use: `docker build .` here, or Railway with Root Directory = this folder.
 
 FROM rust:1.92-slim-bookworm AS builder

@@ -1,5 +1,5 @@
-# Build context: this directory (`services/accounts-service`).
-# Use: `docker build .` here, or Railway with Root Directory = this folder.
+# Build context: this directory (the crate root). Use: `docker build .` from here.
+# Railway: set the service root to this folder; Dockerfile path `Dockerfile`.
 
 FROM rust:1.92-slim-bookworm AS builder
 
