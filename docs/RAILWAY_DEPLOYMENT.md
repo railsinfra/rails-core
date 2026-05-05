@@ -14,18 +14,6 @@ This guide covers deploying the MVP services to Railway using **gRPC** for inter
 - Railway CLI installed + authenticated
 - Neon database connection strings ready
 
-## GitHub Actions (this monorepo)
-
-Railway deploy workflows must live under **`.github/workflows/`** at the **repository root** (GitHub does not run `services/*/.github/workflows/`).
-
-| Workflow file | Trigger | GitHub environment | Behaviour |
-|---------------|---------|--------------------|-----------|
-| `deploy-railway-dev.yml` | push to `develop` | `development` | Per service: **Run Tests** → **Deploy to Railway Dev** (`railway up --service … --detach` from repo root), same shape as the old per-repo `deploy-dev.yml` files under `services/`. |
-| `deploy-railway-staging.yml` | push to `staging` | `staging` | Same pattern for staging (`deploy-staging.yml` parity). |
-| `deploy-railway-production.yml` | push to `main` | `production` | Same pattern for production (`deploy-production.yml` parity). |
-
-YAML under `services/<name>/.github/workflows/` is a **reference** only; change behaviour by editing the **root** workflows above.
-
 ## Monorepo builds (avoid Railpack “could not determine how to build”)
 
 `rails-core` is a **monorepo**: Dockerfiles live under `services/<name>/`, but Railway often clones the **whole repo** with an **empty “Root Directory”**. In that mode Railpack runs at the repo root, skips nested Dockerfiles, and fails.

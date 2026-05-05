@@ -2,19 +2,20 @@
 set -e
 
 # =============================================================================
-# Railway Deployment Helper (monorepo)
+# Railway Deployment Helper (gRPC-only)
 # =============================================================================
-# Same pattern as root `.github/workflows/deploy-railway-*.yml`: from repo root,
-# `railway up --service <name> --detach` (required when the Railway project has
-# multiple services).
+# Deploys the MVP Rust services (accounts + users) to Railway.
 #
 # Usage (from repository root):
 #   ./scripts/deploy-railway.sh [command]
 #
 # Commands:
-#   accounts | users | audit | ledger   Deploy one service
-#   all                                  Deploy accounts, users, audit, ledger
-#   status | logs | help
+#   accounts    Deploy accounts service
+#   users       Deploy users service
+#   all         Deploy accounts then users
+#   status      Show project status
+#   logs        Tail logs for a service
+#   help        Show help
 # =============================================================================
 
 RED='\033[0;31m'
@@ -42,11 +43,11 @@ require_railway() {
 }
 
 deploy_accounts() {
-  log_info "Deploying accounts-service..."
-  cd "${RAILS_CORE}"
+  log_info "Deploying accounts service..."
+  cd "${RAILS_CORE}/services/accounts-service"
   railway link
-  railway up --service accounts-service --detach
-  log_success "accounts-service deployment initiated"
+  railway up --detach
+  log_success "Accounts deployment initiated"
   echo ""
   echo "Set required variables in Railway Dashboard:"
   echo "  DATABASE_URL"
@@ -58,11 +59,11 @@ deploy_accounts() {
 }
 
 deploy_users() {
-  log_info "Deploying users-service..."
-  cd "${RAILS_CORE}"
+  log_info "Deploying users service..."
+  cd "${RAILS_CORE}/services/users-service"
   railway link
-  railway up --service users-service --detach
-  log_success "users-service deployment initiated"
+  railway up --detach
+  log_success "Users deployment initiated"
   echo ""
   echo "Set required variables in Railway Dashboard:"
   echo "  DATABASE_URL"
@@ -71,34 +72,6 @@ deploy_users() {
   echo "  ACCOUNTS_GRPC_URL"
   echo "  API_KEY_HASH_SECRET"
   echo "  INTERNAL_SERVICE_TOKEN_ALLOWLIST (recommended)"
-}
-
-deploy_audit() {
-  log_info "Deploying audit-service..."
-  cd "${RAILS_CORE}"
-  railway link
-  railway up --service audit-service --detach
-  log_success "audit-service deployment initiated"
-  echo ""
-  echo "Set required variables in Railway Dashboard:"
-  echo "  DATABASE_URL"
-  echo "  SERVER_ADDR"
-  echo "  GRPC_PORT"
-  echo "  RUST_LOG"
-}
-
-deploy_ledger() {
-  log_info "Deploying ledger-service..."
-  cd "${RAILS_CORE}"
-  railway link
-  railway up --service ledger-service --detach
-  log_success "ledger-service deployment initiated"
-  echo ""
-  echo "Set required variables in Railway Dashboard:"
-  echo "  DATABASE_URL"
-  echo "  GRPC_PORT"
-  echo "  RAILS_ENV"
-  echo "  LOG_LEVEL"
 }
 
 show_status() {
@@ -119,11 +92,12 @@ show_help() {
 Usage: ./deploy-railway.sh [command]
 
 Commands:
-  accounts | users | audit | ledger   Deploy one service
-  all                                Deploy all four (in order)
-  status                             railway status
-  logs                               railway logs (prompts for service name)
-  help                               This message
+  accounts    Deploy accounts service
+  users       Deploy users service
+  all         Deploy accounts then users
+  status      Show project status
+  logs        Tail logs for a service
+  help        Show help
 EOF
 }
 
@@ -132,19 +106,10 @@ require_railway
 case "${1:-help}" in
   accounts) deploy_accounts ;;
   users) deploy_users ;;
-  audit) deploy_audit ;;
-  ledger) deploy_ledger ;;
-  all)
-    deploy_accounts
-    echo ""
-    deploy_users
-    echo ""
-    deploy_audit
-    echo ""
-    deploy_ledger
-    ;;
+  all) deploy_accounts; echo ""; deploy_users ;;
   status) show_status ;;
   logs) show_logs ;;
   help|--help|-h) show_help ;;
   *) log_error "Unknown command: ${1}"; show_help; exit 1 ;;
 esac
+

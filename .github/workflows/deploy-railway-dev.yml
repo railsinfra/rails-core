@@ -1,181 +1,136 @@
-# Monorepo copy of per-service `services/*/.github/workflows/deploy-dev.yml` (same test → deploy shape).
-# Nested `.github/` under `services/` is not executed by GitHub Actions for this repository.
+# Deploy Rust + Rails services to Railway when `develop` moves forward.
+# Workflows under `services/*/.github/workflows/` are not loaded by GitHub Actions; this root file is the source of truth.
 #
-# Requires: RAILWAY_TOKEN on GitHub environment `development` (Railway project token for dev).
-name: Deploy to Railway Dev
+# Requires: repository secret RAILWAY_TOKEN (Railway project token for the dev environment).
+# Deploy uses `railway up --service <name>` from the monorepo root (same layout as nested templates).
+name: Deploy Railway (dev)
 
 on:
   push:
     branches:
       - develop
 
+concurrency:
+  group: railway-deploy-dev-${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
 env:
   RUST_VERSION: stable
   RUBY_VERSION: "3.3.0"
 
 jobs:
-  accounts-service-test:
-    name: accounts-service / Run Tests
+  users-service:
+    name: users-service → Railway dev
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: services/accounts-service
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-
-      - name: Cache cargo registry and target
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: deploy-dev-accounts-service
-          workspaces: services/accounts-service
-
-      - name: Run tests
-        run: cargo test
-
-  accounts-service-deploy:
-    name: accounts-service / Deploy to Railway Dev
-    runs-on: ubuntu-latest
-    needs: accounts-service-test
-    if: success()
     environment: development
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      - name: Deploy to Railway Dev
-        working-directory: ${{ github.workspace }}
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: |
-          if [ -z "$RAILWAY_TOKEN" ]; then
-            echo "::error::RAILWAY_TOKEN secret is not set. Add it in repo Settings → Secrets and variables → Actions. Create token in Railway project → Settings → Tokens (dev environment)."
-            exit 1
-          fi
-          railway up --service accounts-service --detach
-
-  users-service-test:
-    name: users-service / Run Tests
-    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: services/users-service
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-
-      - name: Cache cargo registry and target
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: deploy-dev-users-service
-          workspaces: services/users-service
-
-      - name: Run tests
-        run: cargo test
-
-  users-service-deploy:
-    name: users-service / Deploy to Railway Dev
-    runs-on: ubuntu-latest
-    needs: users-service-test
-    if: success()
-    environment: development
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      - name: Deploy to Railway Dev
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/users-service
+          save-if: ${{ github.ref == 'refs/heads/develop' }}
+      - run: cargo test --locked -- --include-ignored
+      - run: npm install -g @railway/cli
+      - name: railway up (users-service)
         working-directory: ${{ github.workspace }}
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           if [ -z "$RAILWAY_TOKEN" ]; then
-            echo "::error::RAILWAY_TOKEN secret is not set. Add it in repo Settings → Secrets and variables → Actions. Create token in Railway project → Settings → Tokens (dev environment)."
+            echo "::error::RAILWAY_TOKEN secret is not set (GitHub → Settings → Secrets and variables → Actions). Use a Railway project token for the dev environment."
             exit 1
           fi
           railway up --service users-service --detach
 
-  audit-service-test:
-    name: audit-service / Run Tests
+  accounts-service:
+    name: accounts-service → Railway dev
     runs-on: ubuntu-latest
+    environment: development
     defaults:
       run:
-        working-directory: services/audit-service
+        working-directory: services/accounts-service
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
-
-      - name: Cache cargo registry and target
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: deploy-dev-audit-service
-          workspaces: services/audit-service
-
-      - name: Run tests
-        run: cargo test
-
-  audit-service-deploy:
-    name: audit-service / Deploy to Railway Dev
-    runs-on: ubuntu-latest
-    needs: audit-service-test
-    if: success()
-    environment: development
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      - name: Deploy to Railway Dev
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/accounts-service
+          save-if: ${{ github.ref == 'refs/heads/develop' }}
+      - run: cargo test --locked -- --include-ignored
+      - run: npm install -g @railway/cli
+      - name: railway up (accounts-service)
         working-directory: ${{ github.workspace }}
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           if [ -z "$RAILWAY_TOKEN" ]; then
-            echo "::error::RAILWAY_TOKEN secret is not set. Add it in repo Settings → Secrets and variables → Actions. Create token in Railway project → Settings → Tokens (dev environment)."
+            echo "::error::RAILWAY_TOKEN secret is not set (GitHub → Settings → Secrets and variables → Actions). Use a Railway project token for the dev environment."
             exit 1
           fi
-          railway up --service audit-service --detach
+          railway up --service accounts-service --detach
 
-  ledger-service-test:
-    name: ledger-service / Run Tests
+  audit-service:
+    name: audit-service → Railway dev
     runs-on: ubuntu-latest
+    environment: development
+    defaults:
+      run:
+        working-directory: services/audit-service
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/audit-service
+          save-if: ${{ github.ref == 'refs/heads/develop' }}
+      - run: cargo test --locked -- --include-ignored
+      - run: npm install -g @railway/cli
+      - name: railway up (audit-service)
+        working-directory: ${{ github.workspace }}
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [ -z "$RAILWAY_TOKEN" ]; then
+            echo "::error::RAILWAY_TOKEN secret is not set (GitHub → Settings → Secrets and variables → Actions). Use a Railway project token for the dev environment."
+            exit 1
+          fi
+          set -euo pipefail
+          shopt -s nullglob
+          crates=( "${GITHUB_WORKSPACE}"/*/audit-service )
+          shopt -u nullglob
+          if [ "${#crates[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one */audit-service under the repository root."
+            exit 1
+          fi
+          cd "${crates[0]}"
+          railway up --detach
+
+  ledger-service:
+    name: ledger-service → Railway dev
+    runs-on: ubuntu-latest
+    environment: development
     services:
       postgres:
         image: postgres:15
@@ -197,44 +152,23 @@ jobs:
       run:
         working-directory: services/ledger-service
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Ruby
-        uses: ruby/setup-ruby@v1
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ env.RUBY_VERSION }}
           bundler-cache: true
           working-directory: services/ledger-service
-
-      - name: Setup test database
-        run: bundle exec rails db:create db:schema:load
-
-      - name: Run tests
-        run: bundle exec rails test
-
-  ledger-service-deploy:
-    name: ledger-service / Deploy to Railway Dev
-    runs-on: ubuntu-latest
-    needs: ledger-service-test
-    if: success()
-    environment: development
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      - name: Deploy to Railway Dev
+      - run: bundle exec rails db:test:prepare test
+      - run: npm install -g @railway/cli
+      - name: railway up (ledger-service)
         working-directory: ${{ github.workspace }}
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           if [ -z "$RAILWAY_TOKEN" ]; then
-            echo "::error::RAILWAY_TOKEN secret is not set. Add it in repo Settings → Secrets and variables → Actions. Create token in Railway project → Settings → Tokens (dev environment)."
+            echo "::error::RAILWAY_TOKEN secret is not set (GitHub → Settings → Secrets and variables → Actions). Use a Railway project token for the dev environment."
             exit 1
           fi
           railway up --service ledger-service --detach
