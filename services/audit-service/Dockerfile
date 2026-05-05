@@ -1,9 +1,9 @@
-# Build context must be the **repository root** (see `.github/workflows/ci.yml` docker-builds).
-# `build.rs` resolves protos from `../../proto` relative to `services/audit-service`.
+# Build context: this directory (`services/audit-service`).
+# Use: `docker build .` here, or Railway with Root Directory = this folder.
 
 FROM rust:1.92-slim-bookworm AS builder
 
-WORKDIR /build
+WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config=1.8.1-1 \
@@ -11,10 +11,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     protobuf-compiler=3.21.12-3 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY proto /build/proto
-COPY services/audit-service /build/services/audit-service
-
-WORKDIR /build/services/audit-service
+COPY Cargo.toml Cargo.lock build.rs ./
+COPY proto ./proto
+COPY migrations ./migrations
+COPY src ./src
 
 RUN cargo build --locked --release
 
@@ -28,8 +28,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY --from=builder /build/services/audit-service/target/release/audit_service /app/audit_service
-COPY --from=builder /build/services/audit-service/migrations /app/migrations
+COPY --from=builder /app/target/release/audit_service /app/audit_service
+COPY --from=builder /app/migrations /app/migrations
 
 EXPOSE 8080 50054
 

@@ -41,7 +41,14 @@ From `services/users-service`:
   - `API_KEY_HASH_SECRET` (required for production)
   - `INTERNAL_SERVICE_TOKEN_ALLOWLIST` (recommended hardening)
 
-### 3) (Optional) Deploy Ledger Service
+### 3) Deploy Audit Service
+
+From `services/audit-service`:
+
+- Set **Root Directory** in Railway to `services/audit-service` (or run `railway up` from that folder) so the Docker **build context** matches each service `Dockerfile` (crate-local).
+- Set variables: `AUDIT_DATABASE_URL` or `DATABASE_URL`, `SERVER_ADDR`, `GRPC_PORT`, `RUST_LOG`, etc. (see that crate’s `.env.example`).
+
+### 4) (Optional) Deploy Ledger Service
 
 From `services/ledger-service`:
 

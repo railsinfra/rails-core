@@ -244,10 +244,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build image
-        run: |
-          if [ "${{ matrix.service }}" = "ledger-service" ]; then
-            docker build -f "services/ledger-service/Dockerfile" "services/ledger-service"
-          else
-            # Rust services use sibling `services/audit-service` (accounts/users) and/or `../../proto`; context must be repo root.
-            docker build -f "services/${{ matrix.service }}/Dockerfile" .
-          fi
+        run: docker build -f "services/${{ matrix.service }}/Dockerfile" "services/${{ matrix.service }}"
