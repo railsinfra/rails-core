@@ -1,6 +1,10 @@
 # Local env (use .env.example as template)
 .env
 
+# Optional local Railway deployment notes (keep private; not tracked)
+docs/RAILWAY_DEPLOYMENT.md
+docs/railway_deployment.md
+
 # Rust build outputs (vendored services)
 target/
 **/target/

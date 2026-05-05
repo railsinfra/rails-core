@@ -6,8 +6,11 @@ set -e
 # =============================================================================
 # Deploys the MVP Rust services (accounts + users) to Railway.
 #
-# Usage (from repository root):
+# Usage (from monorepo app root — parent of scripts/):
 #   ./scripts/deploy-railway.sh [command]
+#
+# If each Rust service is a standalone repo, set ACCOUNTS_SERVICE_DIR / USERS_SERVICE_DIR
+# to the folder that contains Dockerfile + Cargo.toml, then run this script from anywhere.
 #
 # Commands:
 #   accounts    Deploy accounts service
@@ -25,7 +28,33 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RAILS_CORE="$(cd "$SCRIPT_DIR/.." && pwd)"
+# Parent of scripts/ is the monorepo app root (contains gateway, docker-compose, etc.).
+MONO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Override with absolute paths when each service is its own clone (no shared parent layout).
+accounts_crate_dir() {
+  if [ -n "${ACCOUNTS_SERVICE_DIR:-}" ]; then
+    printf '%s' "${ACCOUNTS_SERVICE_DIR}"
+    return
+  fi
+  if [ -f "${MONO_ROOT}/accounts-service/Cargo.toml" ]; then
+    printf '%s' "${MONO_ROOT}/accounts-service"
+    return
+  fi
+  printf '%s' "${MONO_ROOT}/services/accounts-service"
+}
+
+users_crate_dir() {
+  if [ -n "${USERS_SERVICE_DIR:-}" ]; then
+    printf '%s' "${USERS_SERVICE_DIR}"
+    return
+  fi
+  if [ -f "${MONO_ROOT}/users-service/Cargo.toml" ]; then
+    printf '%s' "${MONO_ROOT}/users-service"
+    return
+  fi
+  printf '%s' "${MONO_ROOT}/services/users-service"
+}
 
 log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
@@ -44,7 +73,13 @@ require_railway() {
 
 deploy_accounts() {
   log_info "Deploying accounts service..."
-  cd "${RAILS_CORE}/services/accounts-service"
+  local dir
+  dir="$(accounts_crate_dir)"
+  if [ ! -f "${dir}/Dockerfile" ]; then
+    log_error "Accounts crate not found at ${dir}. Set ACCOUNTS_SERVICE_DIR or run from a monorepo with the default layout."
+    exit 1
+  fi
+  cd "${dir}"
   railway link
   railway up --detach
   log_success "Accounts deployment initiated"
@@ -59,7 +94,13 @@ deploy_accounts() {
 
 deploy_users() {
   log_info "Deploying users service..."
-  cd "${RAILS_CORE}/services/users-service"
+  local dir
+  dir="$(users_crate_dir)"
+  if [ ! -f "${dir}/Dockerfile" ]; then
+    log_error "Users crate not found at ${dir}. Set USERS_SERVICE_DIR or run from a monorepo with the default layout."
+    exit 1
+  fi
+  cd "${dir}"
   railway link
   railway up --detach
   log_success "Users deployment initiated"
