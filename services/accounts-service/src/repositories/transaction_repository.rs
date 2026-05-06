@@ -365,7 +365,7 @@ impl TransactionRepository {
                 FROM candidates c
                 WHERE t.id = c.id
                 RETURNING t.id, t.organization_id, t.from_account_id, t.to_account_id, t.amount, t.currency,
-                          t.transaction_kind, t.status, t.failure_reason, t.idempotency_key, t.environment, t.description, t.external_recipient_id, t.reference_id, t.created_at, t.updated_at
+                          t.transaction_kind, t.status, t.failure_reason, t.idempotency_key, t.environment, t.description, t.external_recipient_id, t.reference_id, t.retry_count, t.last_attempted_at, t.next_retry_at, t.terminal_failure_at, t.created_at, t.updated_at
                 "#,
             )
             .bind(older_secs)
@@ -394,7 +394,7 @@ impl TransactionRepository {
                 FROM candidates c
                 WHERE t.id = c.id
                 RETURNING t.id, t.organization_id, t.from_account_id, t.to_account_id, t.amount, t.currency,
-                          t.transaction_kind, t.status, t.failure_reason, t.idempotency_key, t.environment, t.description, t.external_recipient_id, t.reference_id, t.created_at, t.updated_at
+                          t.transaction_kind, t.status, t.failure_reason, t.idempotency_key, t.environment, t.description, t.external_recipient_id, t.reference_id, t.retry_count, t.last_attempted_at, t.next_retry_at, t.terminal_failure_at, t.created_at, t.updated_at
                 "#,
             )
             .bind(older_secs)
