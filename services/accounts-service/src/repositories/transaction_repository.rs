@@ -1,5 +1,5 @@
 use crate::errors::AppError;
-use crate::models::{Transaction, TransactionKind, TransactionStatus, PaginationMeta};
+use crate::models::{PaginationMeta, Transaction, TransactionKind, TransactionStatus};
 use chrono::Duration;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -179,7 +179,7 @@ impl TransactionRepository {
             SELECT COUNT(*) as count 
             FROM transactions
             WHERE organization_id = $1 AND environment = $2
-            "#
+            "#,
         )
         .bind(organization_id)
         .bind(environment)
@@ -306,6 +306,7 @@ impl TransactionRepository {
                     SELECT id FROM transactions
                     WHERE status = 'pending'
                       AND created_at < NOW() - ($1::bigint * INTERVAL '1 second')
+                      AND (next_retry_at IS NULL OR next_retry_at <= NOW())
                       AND environment = $3
                     ORDER BY created_at ASC
                     LIMIT $2
@@ -314,6 +315,8 @@ impl TransactionRepository {
                 UPDATE transactions t
                 SET status = 'posting',
                     failure_reason = NULL,
+                    retry_count = COALESCE(t.retry_count, 0) + 1,
+                    last_attempted_at = NOW(),
                     updated_at = NOW()
                 FROM candidates c
                 WHERE t.id = c.id
@@ -333,6 +336,7 @@ impl TransactionRepository {
                     SELECT id FROM transactions
                     WHERE status = 'pending'
                       AND created_at < NOW() - ($1::bigint * INTERVAL '1 second')
+                      AND (next_retry_at IS NULL OR next_retry_at <= NOW())
                     ORDER BY created_at ASC
                     LIMIT $2
                     FOR UPDATE SKIP LOCKED
@@ -340,6 +344,8 @@ impl TransactionRepository {
                 UPDATE transactions t
                 SET status = 'posting',
                     failure_reason = NULL,
+                    retry_count = COALESCE(t.retry_count, 0) + 1,
+                    last_attempted_at = NOW(),
                     updated_at = NOW()
                 FROM candidates c
                 WHERE t.id = c.id
@@ -423,6 +429,10 @@ impl TransactionRepository {
             description: row.try_get("description").ok().flatten(),
             external_recipient_id: row.try_get("external_recipient_id").ok().flatten(),
             reference_id: row.try_get("reference_id").ok().flatten(),
+            retry_count: row.try_get("retry_count").unwrap_or(0),
+            last_attempted_at: row.try_get("last_attempted_at").ok().flatten(),
+            next_retry_at: row.try_get("next_retry_at").ok().flatten(),
+            terminal_failure_at: row.try_get("terminal_failure_at").ok().flatten(),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         })

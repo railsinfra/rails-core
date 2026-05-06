@@ -3,8 +3,8 @@ use chrono::Duration;
 use uuid::Uuid;
 
 use crate::support::{
-    claim_for_processing, claim_stale_posting_batch, claim_with_default_limit, insert_pending_deposit,
-    mark_posting_stale_30s, migrated_pool,
+    claim_for_processing, claim_stale_posting_batch, claim_with_default_limit,
+    insert_pending_deposit, mark_posting_stale_30s, migrated_pool, set_next_retry_at_future,
 };
 
 #[tokio::test]
@@ -95,4 +95,45 @@ async fn claim_pending_default_limit_branch() {
     }
     let claimed = claim_with_default_limit(&pool).await;
     assert_eq!(claimed.len(), 3);
+}
+
+#[tokio::test]
+async fn claim_batch_skips_rows_with_future_next_retry_at() {
+    let (_c, pool) = migrated_pool().await;
+    let org = Uuid::new_v4();
+    let id = insert_pending_deposit(
+        &pool,
+        org,
+        &format!("idem-next-retry-{}", Uuid::new_v4()),
+        "sandbox",
+        Duration::hours(2),
+    )
+    .await;
+    set_next_retry_at_future(&pool, id, Duration::minutes(30)).await;
+
+    let claimed = claim_for_processing(&pool, Some("sandbox")).await;
+    assert!(
+        claimed.is_empty(),
+        "row with future next_retry_at should not be claimed"
+    );
+}
+
+#[tokio::test]
+async fn claim_batch_increments_retry_metadata_when_claiming() {
+    let (_c, pool) = migrated_pool().await;
+    let org = Uuid::new_v4();
+    let id = insert_pending_deposit(
+        &pool,
+        org,
+        &format!("idem-retry-md-{}", Uuid::new_v4()),
+        "sandbox",
+        Duration::hours(2),
+    )
+    .await;
+
+    let claimed = claim_for_processing(&pool, Some("sandbox")).await;
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].id, id);
+    assert_eq!(claimed[0].retry_count, 1);
+    assert!(claimed[0].last_attempted_at.is_some());
 }

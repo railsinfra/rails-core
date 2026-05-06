@@ -59,32 +59,41 @@ pub(crate) async fn retry_worker_poll_once(
 }
 
 /// Posts rows already moved to `posting` by [`TransactionRepository::claim_pending_transactions_for_ledger_post`].
-pub async fn process_claimed_ledger_posts(pool: &PgPool, ledger_grpc: &LedgerGrpc, pending: Vec<Transaction>) {
+pub async fn process_claimed_ledger_posts(
+    pool: &PgPool,
+    ledger_grpc: &LedgerGrpc,
+    pending: Vec<Transaction>,
+) {
     for tx in pending {
         let environment = if let Some(ref env) = tx.environment {
             env.clone()
         } else {
-            let account = match AccountRepository::find_by_id(pool, tx.from_account_id, "sandbox").await {
-                Ok(a) => a,
-                Err(_) => match AccountRepository::find_by_id(pool, tx.from_account_id, "production").await {
+            let account =
+                match AccountRepository::find_by_id(pool, tx.from_account_id, "sandbox").await {
                     Ok(a) => a,
-                    Err(e) => {
-                        warn!(
-                            transaction_id = %tx.id,
-                            error = %e,
-                            "retry_worker_missing_account; releasing posting row"
-                        );
-                        let _ = TransactionRepository::update_status(
-                            pool,
-                            tx.id,
-                            TransactionStatus::Pending,
-                            Some("retry_worker: could not resolve account environment"),
-                        )
-                        .await;
-                        continue;
+                    Err(_) => {
+                        match AccountRepository::find_by_id(pool, tx.from_account_id, "production")
+                            .await
+                        {
+                            Ok(a) => a,
+                            Err(e) => {
+                                warn!(
+                                    transaction_id = %tx.id,
+                                    error = %e,
+                                    "retry_worker_missing_account; releasing posting row"
+                                );
+                                let _ = TransactionRepository::update_status(
+                                    pool,
+                                    tx.id,
+                                    TransactionStatus::Pending,
+                                    Some("retry_worker: could not resolve account environment"),
+                                )
+                                .await;
+                                continue;
+                            }
+                        }
                     }
-                },
-            };
+                };
 
             account
                 .environment
@@ -93,10 +102,9 @@ pub async fn process_claimed_ledger_posts(pool: &PgPool, ledger_grpc: &LedgerGrp
         };
 
         let (source_external, dest_external) = match tx.transaction_kind {
-            TransactionKind::Transfer => (
-                tx.from_account_id.to_string(),
-                tx.to_account_id.to_string(),
-            ),
+            TransactionKind::Transfer => {
+                (tx.from_account_id.to_string(), tx.to_account_id.to_string())
+            }
             TransactionKind::Deposit => (
                 "SYSTEM_CASH_CONTROL".to_string(),
                 tx.to_account_id.to_string(),
@@ -123,7 +131,13 @@ pub async fn process_claimed_ledger_posts(pool: &PgPool, ledger_grpc: &LedgerGrp
 
         match post_result {
             Ok(()) => {
-                let _ = TransactionRepository::update_status(pool, tx.id, TransactionStatus::Posted, None).await;
+                let _ = TransactionRepository::update_status(
+                    pool,
+                    tx.id,
+                    TransactionStatus::Posted,
+                    None,
+                )
+                .await;
             }
             Err(e) => {
                 let reason = format!("{}", e);
@@ -188,6 +202,10 @@ mod claim_outcome_tests {
             description: None,
             external_recipient_id: None,
             reference_id: None,
+            retry_count: 0,
+            last_attempted_at: None,
+            next_retry_at: None,
+            terminal_failure_at: None,
             created_at: now,
             updated_at: now,
         };
@@ -199,11 +217,9 @@ mod claim_outcome_tests {
 
     #[tokio::test]
     async fn claim_outcome_err_returns_none_after_sleep() {
-        let out = handle_retry_claim_outcome(
-            Err(AppError::Internal("db down".into())),
-            Duration::ZERO,
-        )
-        .await;
+        let out =
+            handle_retry_claim_outcome(Err(AppError::Internal("db down".into())), Duration::ZERO)
+                .await;
         assert!(out.is_none());
     }
 }
@@ -289,7 +305,9 @@ mod poll_smoke {
         let ledger = LedgerGrpc::new("http://127.0.0.1:9".to_string());
         retry_worker_poll_once(&pool, &ledger, StdDuration::ZERO, StdDuration::ZERO).await;
 
-        let row = TransactionRepository::find_by_id(&pool, id).await.expect("row");
+        let row = TransactionRepository::find_by_id(&pool, id)
+            .await
+            .expect("row");
         assert_eq!(row.status, TransactionStatus::Pending);
         assert!(row.failure_reason.unwrap_or_default().len() > 0);
     }
