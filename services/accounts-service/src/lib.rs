@@ -155,6 +155,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         crate::services::transaction_retry::run(retry_pool, retry_ledger).await;
     });
 
+    let reconcile_pool = pool.clone();
+    tokio::spawn(async move {
+        crate::services::transaction_reconcile::run(reconcile_pool).await;
+    });
+
     let addr = SocketAddr::from(([0, 0, 0, 0], settings.port));
     info!("Server starting on {}", addr);
     info!("gRPC server starting on {}", grpc_addr);
