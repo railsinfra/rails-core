@@ -396,6 +396,60 @@ impl TransactionRepository {
         Ok(Self::row_to_transaction(&row)?)
     }
 
+    pub async fn schedule_retry(
+        executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
+        id: Uuid,
+        failure_reason: &str,
+        next_retry_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Transaction, AppError> {
+        let row = sqlx::query(
+            r#"
+            UPDATE transactions
+            SET status = 'pending',
+                failure_reason = $2,
+                next_retry_at = $3,
+                terminal_failure_at = NULL,
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING id, organization_id, from_account_id, to_account_id, amount, currency,
+                      transaction_kind, status, failure_reason, idempotency_key, environment, description, external_recipient_id, reference_id, retry_count, last_attempted_at, next_retry_at, terminal_failure_at, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(failure_reason)
+        .bind(next_retry_at)
+        .fetch_one(executor)
+        .await?;
+
+        Ok(Self::row_to_transaction(&row)?)
+    }
+
+    pub async fn mark_terminal_failure(
+        executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
+        id: Uuid,
+        failure_reason: &str,
+    ) -> Result<Transaction, AppError> {
+        let row = sqlx::query(
+            r#"
+            UPDATE transactions
+            SET status = 'failed',
+                failure_reason = $2,
+                next_retry_at = NULL,
+                terminal_failure_at = NOW(),
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING id, organization_id, from_account_id, to_account_id, amount, currency,
+                      transaction_kind, status, failure_reason, idempotency_key, environment, description, external_recipient_id, reference_id, retry_count, last_attempted_at, next_retry_at, terminal_failure_at, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(failure_reason)
+        .fetch_one(executor)
+        .await?;
+
+        Ok(Self::row_to_transaction(&row)?)
+    }
+
     pub fn row_to_transaction(row: &sqlx::postgres::PgRow) -> Result<Transaction, AppError> {
         let kind_str: String = row.get("transaction_kind");
         let transaction_kind = match kind_str.as_str() {
