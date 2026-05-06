@@ -107,8 +107,9 @@ Rails.application.configure do
   config.active_record.dump_schema_after_migration = false
 
   # Enable DNS rebinding protection and other `Host` header attacks.
-  # Allow Railway healthcheck hostname for internal health checks
-  config.hosts << "healthcheck.railway.app"
+  # Railway public URLs and healthchecks use *.railway.app (including *.up.railway.app). The BFF and
+  # browsers call the ledger with that Host header; without this entry Rails returns 403 Blocked host.
+  config.hosts << /\A[\w.-]+\.railway\.app\z/i
   
   # Skip DNS rebinding protection for the default health check endpoint.
   # This ensures Railway healthchecks can reach /up even if host authorization is strict
