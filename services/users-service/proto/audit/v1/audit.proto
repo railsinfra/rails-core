@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package rails.core.audit.v1;
+
+option java_multiple_files = true;
+option java_package = "com.rails.core.audit.v1";
+
+// Unary ingest: exactly one event per request (v1).
+service AuditService {
+  rpc AppendAuditEvent(AppendAuditEventRequest) returns (AppendAuditEventResponse);
+}
+
+message AppendAuditEventRequest {
+  AuditEvent event = 1;
+}
+
+message AppendAuditEventResponse {
+  string audit_event_id = 1;
+}
+
+enum ActorType {
+  ACTOR_TYPE_UNSPECIFIED = 0;
+  ACTOR_TYPE_USER = 1;
+  ACTOR_TYPE_API_KEY = 2;
+  ACTOR_TYPE_INTERNAL_SERVICE = 3;
+  ACTOR_TYPE_ANONYMOUS = 4;
+}
+
+enum Outcome {
+  OUTCOME_UNSPECIFIED = 0;
+  OUTCOME_SUCCESS = 1;
+  OUTCOME_CLIENT_ERROR = 2;
+  OUTCOME_SERVER_ERROR = 3;
+}
+
+message Actor {
+  ActorType type = 1;
+  string id = 2;
+  repeated string roles = 3;
+}
+
+message Target {
+  string type = 1;
+  string id = 2;
+}
+
+message RequestContext {
+  string id = 1;
+  string method = 2;
+  string path = 3;
+  string ip = 4;
+  string user_agent = 5;
+}
+
+message AuditEvent {
+  string occurred_at = 1;
+  int32 schema_version = 2;
+  string source_service = 3;
+  string organization_id = 4;
+  string environment = 5;
+  Actor actor = 6;
+  string action = 7;
+  Target target = 8;
+  Outcome outcome = 9;
+  RequestContext request = 10;
+  string correlation_id = 11;
+  optional string reason = 12;
+  map<string, string> metadata = 13;
+}

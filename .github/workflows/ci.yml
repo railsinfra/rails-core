@@ -240,14 +240,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [users-service, accounts-service, ledger-service]
+        service: [users-service, accounts-service, audit-service, ledger-service]
     steps:
       - uses: actions/checkout@v4
       - name: Build image
-        run: |
-          if [ "${{ matrix.service }}" = "ledger-service" ]; then
-            docker build -f "services/ledger-service/Dockerfile" "services/ledger-service"
-          else
-            # Rust services use path `../audit-service` and build.rs `../../proto`; context must be repo root.
-            docker build -f "services/${{ matrix.service }}/Dockerfile" .
-          fi
+        working-directory: services/${{ matrix.service }}
+        run: docker build -t "${{ matrix.service }}:ci" .
