@@ -11,10 +11,10 @@ target/
 **/*.rs.bk
 
 # Rails (ledger)
-services/ledger-service/log/
-services/ledger-service/tmp/
-services/ledger-service/storage/
-services/ledger-service/coverage/
+ledger-service/log/
+ledger-service/tmp/
+ledger-service/storage/
+ledger-service/coverage/
 
 # CI / Sonar (Rust LCOV at repo root)
 coverage-rust/
