@@ -28,6 +28,14 @@ pub struct Transaction {
     pub external_recipient_id: Option<String>,
     #[serde(rename = "reference_id")]
     pub reference_id: Option<Uuid>,
+    #[serde(rename = "retry_count")]
+    pub retry_count: i32,
+    #[serde(rename = "last_attempted_at")]
+    pub last_attempted_at: Option<DateTime<Utc>>,
+    #[serde(rename = "next_retry_at")]
+    pub next_retry_at: Option<DateTime<Utc>>,
+    #[serde(rename = "terminal_failure_at")]
+    pub terminal_failure_at: Option<DateTime<Utc>>,
     #[serde(rename = "created_at")]
     pub created_at: DateTime<Utc>,
     #[serde(rename = "updated_at")]
@@ -148,15 +156,24 @@ impl AccountTransactionResponse {
             TransactionKind::Withdraw => ("withdrawal".to_string(), String::default()),
             TransactionKind::Transfer => {
                 if transaction.from_account_id == for_account_id {
-                    ("withdrawal".to_string(), transaction.to_account_id.to_string())
+                    (
+                        "withdrawal".to_string(),
+                        transaction.to_account_id.to_string(),
+                    )
                 } else {
-                    ("deposit".to_string(), transaction.from_account_id.to_string())
+                    (
+                        "deposit".to_string(),
+                        transaction.from_account_id.to_string(),
+                    )
                 }
             }
         };
         let description = transaction.description.as_deref().unwrap_or("");
         let external_recipient_id = transaction.external_recipient_id.as_deref().unwrap_or("");
-        let reference_id = transaction.reference_id.map(|u| u.to_string()).unwrap_or_default();
+        let reference_id = transaction
+            .reference_id
+            .map(|u| u.to_string())
+            .unwrap_or_default();
         Self::build(
             transaction,
             for_account_id,
@@ -172,30 +189,31 @@ impl AccountTransactionResponse {
     /// Build for deposit/withdraw/transfer API responses.
     /// For transfer: use account_id=from_id, transaction_type="transfer", recipient_account_id=to_id.
     /// balance_after: account balance in cents after the transaction (from Ledger).
-    pub fn for_mutation_response(
-        transaction: &Transaction,
-        balance_after: i64,
-    ) -> Self {
-        let (account_id, transaction_type, recipient_account_id) = match transaction.transaction_kind {
-            TransactionKind::Deposit => (
-                transaction.from_account_id,
-                "deposit".to_string(),
-                String::default(),
-            ),
-            TransactionKind::Withdraw => (
-                transaction.from_account_id,
-                "withdrawal".to_string(),
-                String::default(),
-            ),
-            TransactionKind::Transfer => (
-                transaction.from_account_id,
-                "transfer".to_string(),
-                transaction.to_account_id.to_string(),
-            ),
-        };
+    pub fn for_mutation_response(transaction: &Transaction, balance_after: i64) -> Self {
+        let (account_id, transaction_type, recipient_account_id) =
+            match transaction.transaction_kind {
+                TransactionKind::Deposit => (
+                    transaction.from_account_id,
+                    "deposit".to_string(),
+                    String::default(),
+                ),
+                TransactionKind::Withdraw => (
+                    transaction.from_account_id,
+                    "withdrawal".to_string(),
+                    String::default(),
+                ),
+                TransactionKind::Transfer => (
+                    transaction.from_account_id,
+                    "transfer".to_string(),
+                    transaction.to_account_id.to_string(),
+                ),
+            };
         let description = transaction.description.as_deref().unwrap_or("");
         let external_recipient_id = transaction.external_recipient_id.as_deref().unwrap_or("");
-        let reference_id = transaction.reference_id.map(|u| u.to_string()).unwrap_or_default();
+        let reference_id = transaction
+            .reference_id
+            .map(|u| u.to_string())
+            .unwrap_or_default();
         Self::build(
             transaction,
             account_id,
@@ -269,6 +287,10 @@ mod tests {
             description: None,
             external_recipient_id: None,
             reference_id: None,
+            retry_count: 0,
+            last_attempted_at: None,
+            next_retry_at: None,
+            terminal_failure_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
@@ -277,7 +299,14 @@ mod tests {
     #[test]
     fn from_transaction_deposit() {
         let acc = Uuid::new_v4();
-        let tx = sample_transaction(Uuid::new_v4(), acc, acc, TransactionKind::Deposit, TransactionStatus::Posted, 10000);
+        let tx = sample_transaction(
+            Uuid::new_v4(),
+            acc,
+            acc,
+            TransactionKind::Deposit,
+            TransactionStatus::Posted,
+            10000,
+        );
         let resp = AccountTransactionResponse::from_transaction(&tx, acc, 15000);
         assert_eq!(resp.account_id, acc);
         assert_eq!(resp.transaction_type, "deposit");
@@ -290,7 +319,14 @@ mod tests {
     #[test]
     fn from_transaction_withdrawal() {
         let acc = Uuid::new_v4();
-        let tx = sample_transaction(Uuid::new_v4(), acc, acc, TransactionKind::Withdraw, TransactionStatus::Posted, 5000);
+        let tx = sample_transaction(
+            Uuid::new_v4(),
+            acc,
+            acc,
+            TransactionKind::Withdraw,
+            TransactionStatus::Posted,
+            5000,
+        );
         let resp = AccountTransactionResponse::from_transaction(&tx, acc, 5000);
         assert_eq!(resp.transaction_type, "withdrawal");
         assert_eq!(resp.status, "completed");
@@ -300,7 +336,14 @@ mod tests {
     fn from_transaction_transfer_as_sender() {
         let from = Uuid::new_v4();
         let to = Uuid::new_v4();
-        let tx = sample_transaction(Uuid::new_v4(), from, to, TransactionKind::Transfer, TransactionStatus::Posted, 2000);
+        let tx = sample_transaction(
+            Uuid::new_v4(),
+            from,
+            to,
+            TransactionKind::Transfer,
+            TransactionStatus::Posted,
+            2000,
+        );
         let resp = AccountTransactionResponse::from_transaction(&tx, from, 8000);
         assert_eq!(resp.account_id, from);
         assert_eq!(resp.transaction_type, "withdrawal");
@@ -311,7 +354,14 @@ mod tests {
     fn from_transaction_transfer_as_receiver() {
         let from = Uuid::new_v4();
         let to = Uuid::new_v4();
-        let tx = sample_transaction(Uuid::new_v4(), from, to, TransactionKind::Transfer, TransactionStatus::Posted, 2000);
+        let tx = sample_transaction(
+            Uuid::new_v4(),
+            from,
+            to,
+            TransactionKind::Transfer,
+            TransactionStatus::Posted,
+            2000,
+        );
         let resp = AccountTransactionResponse::from_transaction(&tx, to, 12000);
         assert_eq!(resp.account_id, to);
         assert_eq!(resp.transaction_type, "deposit");
@@ -321,7 +371,14 @@ mod tests {
     #[test]
     fn from_transaction_balance_after_defaults_to_zero_when_empty() {
         let acc = Uuid::new_v4();
-        let tx = sample_transaction(Uuid::new_v4(), acc, acc, TransactionKind::Deposit, TransactionStatus::Posted, 100);
+        let tx = sample_transaction(
+            Uuid::new_v4(),
+            acc,
+            acc,
+            TransactionKind::Deposit,
+            TransactionStatus::Posted,
+            100,
+        );
         let resp = AccountTransactionResponse::from_transaction(&tx, acc, 0);
         assert_eq!(resp.balance_after, 0);
     }
@@ -329,18 +386,55 @@ mod tests {
     #[test]
     fn from_transaction_status_mapping() {
         let acc = Uuid::new_v4();
-        let tx_pending = sample_transaction(Uuid::new_v4(), acc, acc, TransactionKind::Deposit, TransactionStatus::Pending, 100);
-        let tx_failed = sample_transaction(Uuid::new_v4(), acc, acc, TransactionKind::Deposit, TransactionStatus::Failed, 100);
-        assert_eq!(AccountTransactionResponse::from_transaction(&tx_pending, acc, 0).status, "pending");
-        assert_eq!(AccountTransactionResponse::from_transaction(&tx_failed, acc, 0).status, "failed");
-        let tx_posting = sample_transaction(Uuid::new_v4(), acc, acc, TransactionKind::Deposit, TransactionStatus::Posting, 100);
-        assert_eq!(AccountTransactionResponse::from_transaction(&tx_posting, acc, 0).status, "pending");
+        let tx_pending = sample_transaction(
+            Uuid::new_v4(),
+            acc,
+            acc,
+            TransactionKind::Deposit,
+            TransactionStatus::Pending,
+            100,
+        );
+        let tx_failed = sample_transaction(
+            Uuid::new_v4(),
+            acc,
+            acc,
+            TransactionKind::Deposit,
+            TransactionStatus::Failed,
+            100,
+        );
+        assert_eq!(
+            AccountTransactionResponse::from_transaction(&tx_pending, acc, 0).status,
+            "pending"
+        );
+        assert_eq!(
+            AccountTransactionResponse::from_transaction(&tx_failed, acc, 0).status,
+            "failed"
+        );
+        let tx_posting = sample_transaction(
+            Uuid::new_v4(),
+            acc,
+            acc,
+            TransactionKind::Deposit,
+            TransactionStatus::Posting,
+            100,
+        );
+        assert_eq!(
+            AccountTransactionResponse::from_transaction(&tx_posting, acc, 0).status,
+            "pending"
+        );
     }
 
     #[test]
     fn for_mutation_response_deposit() {
         let acc = Uuid::new_v4();
-        let tx = sample_transaction(Uuid::new_v4(), acc, acc, TransactionKind::Deposit, TransactionStatus::Posted, 10000);
+        let tx = sample_transaction(
+            Uuid::new_v4(),
+            acc,
+            acc,
+            TransactionKind::Deposit,
+            TransactionStatus::Posted,
+            10000,
+        );
         let resp = AccountTransactionResponse::for_mutation_response(&tx, 0);
         assert_eq!(resp.account_id, acc);
         assert_eq!(resp.transaction_type, "deposit");
@@ -350,7 +444,14 @@ mod tests {
     #[test]
     fn for_mutation_response_withdraw() {
         let acc = Uuid::new_v4();
-        let tx = sample_transaction(Uuid::new_v4(), acc, acc, TransactionKind::Withdraw, TransactionStatus::Posted, 5000);
+        let tx = sample_transaction(
+            Uuid::new_v4(),
+            acc,
+            acc,
+            TransactionKind::Withdraw,
+            TransactionStatus::Posted,
+            5000,
+        );
         let resp = AccountTransactionResponse::for_mutation_response(&tx, 0);
         assert_eq!(resp.account_id, acc);
         assert_eq!(resp.transaction_type, "withdrawal");
@@ -360,7 +461,14 @@ mod tests {
     fn for_mutation_response_transfer() {
         let from = Uuid::new_v4();
         let to = Uuid::new_v4();
-        let tx = sample_transaction(Uuid::new_v4(), from, to, TransactionKind::Transfer, TransactionStatus::Posted, 2000);
+        let tx = sample_transaction(
+            Uuid::new_v4(),
+            from,
+            to,
+            TransactionKind::Transfer,
+            TransactionStatus::Posted,
+            2000,
+        );
         let resp = AccountTransactionResponse::for_mutation_response(&tx, 0);
         assert_eq!(resp.account_id, from);
         assert_eq!(resp.transaction_type, "transfer");
@@ -369,7 +477,14 @@ mod tests {
 
     #[test]
     fn for_mutation_response_includes_description() {
-        let mut tx = sample_transaction(Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), TransactionKind::Withdraw, TransactionStatus::Posted, 1000);
+        let mut tx = sample_transaction(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            TransactionKind::Withdraw,
+            TransactionStatus::Posted,
+            1000,
+        );
         tx.description = Some("Optional note".to_string());
         let resp = AccountTransactionResponse::for_mutation_response(&tx, 0);
         assert_eq!(resp.description, "Optional note");
@@ -377,21 +492,42 @@ mod tests {
 
     #[test]
     fn for_mutation_response_includes_balance_after() {
-        let tx = sample_transaction(Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), TransactionKind::Deposit, TransactionStatus::Posted, 1000);
+        let tx = sample_transaction(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            TransactionKind::Deposit,
+            TransactionStatus::Posted,
+            1000,
+        );
         let resp = AccountTransactionResponse::for_mutation_response(&tx, 25000);
         assert_eq!(resp.balance_after, 25000);
     }
 
     #[test]
     fn for_mutation_response_balance_after_zero() {
-        let tx = sample_transaction(Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), TransactionKind::Deposit, TransactionStatus::Posted, 1000);
+        let tx = sample_transaction(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            TransactionKind::Deposit,
+            TransactionStatus::Posted,
+            1000,
+        );
         let resp = AccountTransactionResponse::for_mutation_response(&tx, 0);
         assert_eq!(resp.balance_after, 0);
     }
 
     #[test]
     fn for_mutation_response_includes_external_recipient_and_reference() {
-        let mut tx = sample_transaction(Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), TransactionKind::Withdraw, TransactionStatus::Posted, 1000);
+        let mut tx = sample_transaction(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            TransactionKind::Withdraw,
+            TransactionStatus::Posted,
+            1000,
+        );
         tx.external_recipient_id = Some("ext_bank_123".to_string());
         tx.reference_id = Some(Uuid::new_v4());
         let ref_id = tx.reference_id.unwrap().to_string();
