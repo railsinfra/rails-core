@@ -7,6 +7,50 @@ use uuid::Uuid;
 pub struct TransactionRepository;
 
 impl TransactionRepository {
+    pub async fn reconcile_stale_transactions(
+        pool: &PgPool,
+        stale_posting_after: Duration,
+        max_pending_age: Duration,
+    ) -> Result<(u64, u64), AppError> {
+        let stale_secs = stale_posting_after.num_seconds().max(1);
+        let pending_secs = max_pending_age.num_seconds().max(1);
+
+        let requeued = sqlx::query(
+            r#"
+            UPDATE transactions
+            SET status = 'pending',
+                failure_reason = 'reconciler: posting stale; requeued',
+                updated_at = NOW()
+            WHERE status = 'posting'
+              AND updated_at < NOW() - ($1::bigint * INTERVAL '1 second')
+            "#,
+        )
+        .bind(stale_secs)
+        .execute(pool)
+        .await?
+        .rows_affected();
+
+        let failed = sqlx::query(
+            r#"
+            UPDATE transactions
+            SET status = 'failed',
+                failure_reason = COALESCE(failure_reason, 'reconciler: pending age exceeded'),
+                next_retry_at = NULL,
+                terminal_failure_at = NOW(),
+                updated_at = NOW()
+            WHERE status = 'pending'
+              AND created_at < NOW() - ($1::bigint * INTERVAL '1 second')
+              AND retry_count >= 1
+            "#,
+        )
+        .bind(pending_secs)
+        .execute(pool)
+        .await?
+        .rows_affected();
+
+        Ok((requeued, failed))
+    }
+
     pub async fn create_or_get_by_idempotency(
         executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
         organization_id: Uuid,
