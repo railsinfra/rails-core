@@ -234,6 +234,32 @@ async fn http_post_json(
     status
 }
 
+async fn http_post_json_expect_status(
+    client: &reqwest::Client,
+    base_url: &str,
+    path: &str,
+    idem: &str,
+    body: serde_json::Value,
+    expected_status: u16,
+) -> u16 {
+    let url = format!("{base_url}{path}");
+    let resp = client
+        .post(url)
+        .header("content-type", "application/json")
+        .header("x-environment", "sandbox")
+        .header("Idempotency-Key", idem)
+        .json(&body)
+        .send()
+        .await
+        .expect("http request");
+    let status = resp.status().as_u16();
+    if status != expected_status {
+        let text = resp.text().await.unwrap_or_default();
+        panic!("unexpected status={status} expected={expected_status} url={path} body={text}");
+    }
+    status
+}
+
 #[tokio::test]
 async fn deposit_withdraw_transfer_exercise_ledger_and_background_audit() {
     let (_c, pool) = migrated_accounts_pool().await;
@@ -310,4 +336,99 @@ async fn deposit_withdraw_transfer_exercise_ledger_and_background_audit() {
         audit_hits.load(Ordering::SeqCst) >= 3,
         "expected audit append calls for deposit+withdraw+transfer"
     );
+}
+
+#[derive(Clone, Default)]
+struct LedgerFailPost;
+
+#[tonic::async_trait]
+impl LedgerService for LedgerFailPost {
+    async fn post_transaction(
+        &self,
+        _req: GrpcRequest<PostTransactionRequest>,
+    ) -> Result<GrpcResponse<PostTransactionResponse>, Status> {
+        Err(Status::internal("forced ledger post failure"))
+    }
+
+    async fn get_account_balance(
+        &self,
+        req: GrpcRequest<GetAccountBalanceRequest>,
+    ) -> Result<GrpcResponse<GetAccountBalanceResponse>, Status> {
+        let r = req.into_inner();
+        Ok(GrpcResponse::new(GetAccountBalanceResponse {
+            balance: "-100000000".to_string(),
+            currency: r.currency,
+        }))
+    }
+
+    async fn get_account_balances(
+        &self,
+        req: GrpcRequest<GetAccountBalancesRequest>,
+    ) -> Result<GrpcResponse<GetAccountBalancesResponse>, Status> {
+        let r = req.into_inner();
+        Ok(GrpcResponse::new(GetAccountBalancesResponse {
+            from_balance: "-200000".to_string(),
+            to_balance: "-300000".to_string(),
+            currency: r.currency,
+        }))
+    }
+}
+
+async fn spawn_ledger_failing_post_server() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let incoming = TcpListenerStream::new(listener);
+    tokio::spawn(async move {
+        Server::builder()
+            .add_service(LedgerServiceServer::new(LedgerFailPost::default()))
+            .serve_with_incoming(incoming)
+            .await
+            .ok();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    format!("http://{}", addr)
+}
+
+#[tokio::test]
+async fn deposit_returns_202_when_ledger_post_is_deferred() {
+    let (_c, pool) = migrated_accounts_pool().await;
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let account_id = insert_active_account(&pool, org, "sandbox", user, "1000000000000010").await;
+
+    let users_url = spawn_users_server().await;
+    let ledger_url = spawn_ledger_failing_post_server().await;
+    let audit_hits = Arc::new(AtomicUsize::new(0));
+    let audit_url = spawn_audit_server(audit_hits).await;
+
+    let users_grpc = accounts_api::users_grpc::UsersGrpc::connect_lazy(&users_url).unwrap();
+    let ledger_grpc = LedgerGrpc::new(ledger_url);
+    let audit_client = audit_channel(&audit_url);
+    let app = create_router(pool, ledger_grpc, users_grpc, audit_client);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+
+    let base_url = format!("http://{addr}");
+    let client = reqwest::Client::new();
+    let status = http_post_json_expect_status(
+        &client,
+        &base_url,
+        &format!("/api/v1/accounts/{account_id}/deposit"),
+        "idem-deposit-202",
+        json!({"amount": 1000}),
+        202,
+    )
+    .await;
+    assert_eq!(status, 202);
+
+    server.abort();
 }
