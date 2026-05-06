@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+const CARGO_MANIFEST_DIR_ENV: &str = "CARGO_MANIFEST_DIR";
+
 fn audit_proto_paths(manifest_dir: &Path) -> (PathBuf, PathBuf) {
     let vendored = manifest_dir.join("proto/audit/v1/audit.proto");
     if vendored.exists() {
@@ -10,7 +12,7 @@ fn audit_proto_paths(manifest_dir: &Path) -> (PathBuf, PathBuf) {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
+    let manifest_dir = PathBuf::from(std::env::var(CARGO_MANIFEST_DIR_ENV)?);
     let (audit_proto, proto_include) = audit_proto_paths(&manifest_dir);
     tonic_build::configure()
         .build_server(true)
