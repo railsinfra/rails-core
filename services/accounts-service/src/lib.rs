@@ -17,6 +17,7 @@ pub mod utils;
 use axum::serve;
 use sqlx::postgres::PgPoolOptions;
 use std::net::SocketAddr;
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tracing::info;
 use tracing_subscriber::prelude::*;
@@ -29,6 +30,7 @@ use grpc::accounts::AccountsGrpcService;
 use grpc::proto::accounts_service_server::AccountsServiceServer;
 use sqlx::PgPool;
 use tonic::transport::Server;
+use tonic::transport::Endpoint;
 
 pub(crate) fn resolve_migrate_run_result(
     result: Result<(), sqlx::migrate::MigrateError>,
@@ -54,6 +56,20 @@ pub(crate) async fn run_accounts_migrations(pool: &PgPool) -> Result<(), Box<dyn
     migrator.set_ignore_missing(true);
     resolve_migrate_run_result(migrator.run(pool).await)?;
     Ok(())
+}
+
+pub(crate) async fn probe_ledger_connectivity(
+    endpoint: &str,
+    timeout: Duration,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let ep = Endpoint::from_shared(endpoint.to_string())
+        .map_err(|e| anyhow::anyhow!("invalid LEDGER_GRPC_URL: {}", e))?;
+    ep.connect_timeout(timeout)
+        .timeout(timeout)
+        .connect()
+        .await
+        .map(|_| ())
+        .map_err(|e| anyhow::anyhow!("ledger startup connectivity probe failed: {}", e).into())
 }
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
@@ -101,6 +117,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     info!("Database migrations completed");
 
     let ledger_grpc = LedgerGrpc::new(settings.ledger_grpc_url.clone());
+    probe_ledger_connectivity(ledger_grpc.endpoint(), Duration::from_secs(2)).await?;
+    info!(
+        "Ledger gRPC startup connectivity probe succeeded at {}",
+        ledger_grpc.endpoint()
+    );
 
     let users_grpc = users_grpc::UsersGrpc::connect_lazy(&settings.users_grpc_url)?;
     info!(
@@ -132,6 +153,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let retry_ledger = ledger_grpc.clone();
     tokio::spawn(async move {
         crate::services::transaction_retry::run(retry_pool, retry_ledger).await;
+    });
+
+    let reconcile_pool = pool.clone();
+    tokio::spawn(async move {
+        crate::services::transaction_reconcile::run(reconcile_pool).await;
     });
 
     let addr = SocketAddr::from(([0, 0, 0, 0], settings.port));
@@ -221,5 +247,27 @@ mod run_accounts_migrations_smoke {
         run_accounts_migrations(&pool)
             .await
             .expect("second migration run should succeed");
+    }
+}
+
+#[cfg(test)]
+mod ledger_probe_tests {
+    use super::probe_ledger_connectivity;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn ledger_probe_rejects_invalid_uri() {
+        let err = probe_ledger_connectivity("http://[::1", Duration::from_millis(50))
+            .await
+            .expect_err("invalid URI should fail");
+        assert!(format!("{}", err).contains("invalid LEDGER_GRPC_URL"));
+    }
+
+    #[tokio::test]
+    async fn ledger_probe_fails_for_unreachable_target() {
+        let err = probe_ledger_connectivity("http://127.0.0.1:9", Duration::from_millis(50))
+            .await
+            .expect_err("unreachable endpoint should fail");
+        assert!(format!("{}", err).contains("ledger startup connectivity probe failed"));
     }
 }

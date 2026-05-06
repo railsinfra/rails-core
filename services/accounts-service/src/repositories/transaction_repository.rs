@@ -1,5 +1,5 @@
 use crate::errors::AppError;
-use crate::models::{Transaction, TransactionKind, TransactionStatus, PaginationMeta};
+use crate::models::{PaginationMeta, Transaction, TransactionKind, TransactionStatus};
 use chrono::Duration;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -7,6 +7,50 @@ use uuid::Uuid;
 pub struct TransactionRepository;
 
 impl TransactionRepository {
+    pub async fn reconcile_stale_transactions(
+        pool: &PgPool,
+        stale_posting_after: Duration,
+        max_pending_age: Duration,
+    ) -> Result<(u64, u64), AppError> {
+        let stale_secs = stale_posting_after.num_seconds().max(1);
+        let pending_secs = max_pending_age.num_seconds().max(1);
+
+        let requeued = sqlx::query(
+            r#"
+            UPDATE transactions
+            SET status = 'pending',
+                failure_reason = 'reconciler: posting stale; requeued',
+                updated_at = NOW()
+            WHERE status = 'posting'
+              AND updated_at < NOW() - ($1::bigint * INTERVAL '1 second')
+            "#,
+        )
+        .bind(stale_secs)
+        .execute(pool)
+        .await?
+        .rows_affected();
+
+        let failed = sqlx::query(
+            r#"
+            UPDATE transactions
+            SET status = 'failed',
+                failure_reason = COALESCE(failure_reason, 'reconciler: pending age exceeded'),
+                next_retry_at = NULL,
+                terminal_failure_at = NOW(),
+                updated_at = NOW()
+            WHERE status = 'pending'
+              AND created_at < NOW() - ($1::bigint * INTERVAL '1 second')
+              AND retry_count >= 1
+            "#,
+        )
+        .bind(pending_secs)
+        .execute(pool)
+        .await?
+        .rows_affected();
+
+        Ok((requeued, failed))
+    }
+
     pub async fn create_or_get_by_idempotency(
         executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
         organization_id: Uuid,
@@ -179,7 +223,7 @@ impl TransactionRepository {
             SELECT COUNT(*) as count 
             FROM transactions
             WHERE organization_id = $1 AND environment = $2
-            "#
+            "#,
         )
         .bind(organization_id)
         .bind(environment)
@@ -306,6 +350,7 @@ impl TransactionRepository {
                     SELECT id FROM transactions
                     WHERE status = 'pending'
                       AND created_at < NOW() - ($1::bigint * INTERVAL '1 second')
+                      AND (next_retry_at IS NULL OR next_retry_at <= NOW())
                       AND environment = $3
                     ORDER BY created_at ASC
                     LIMIT $2
@@ -314,11 +359,13 @@ impl TransactionRepository {
                 UPDATE transactions t
                 SET status = 'posting',
                     failure_reason = NULL,
+                    retry_count = COALESCE(t.retry_count, 0) + 1,
+                    last_attempted_at = NOW(),
                     updated_at = NOW()
                 FROM candidates c
                 WHERE t.id = c.id
                 RETURNING t.id, t.organization_id, t.from_account_id, t.to_account_id, t.amount, t.currency,
-                          t.transaction_kind, t.status, t.failure_reason, t.idempotency_key, t.environment, t.description, t.external_recipient_id, t.reference_id, t.created_at, t.updated_at
+                          t.transaction_kind, t.status, t.failure_reason, t.idempotency_key, t.environment, t.description, t.external_recipient_id, t.reference_id, t.retry_count, t.last_attempted_at, t.next_retry_at, t.terminal_failure_at, t.created_at, t.updated_at
                 "#,
             )
             .bind(older_secs)
@@ -333,6 +380,7 @@ impl TransactionRepository {
                     SELECT id FROM transactions
                     WHERE status = 'pending'
                       AND created_at < NOW() - ($1::bigint * INTERVAL '1 second')
+                      AND (next_retry_at IS NULL OR next_retry_at <= NOW())
                     ORDER BY created_at ASC
                     LIMIT $2
                     FOR UPDATE SKIP LOCKED
@@ -340,11 +388,13 @@ impl TransactionRepository {
                 UPDATE transactions t
                 SET status = 'posting',
                     failure_reason = NULL,
+                    retry_count = COALESCE(t.retry_count, 0) + 1,
+                    last_attempted_at = NOW(),
                     updated_at = NOW()
                 FROM candidates c
                 WHERE t.id = c.id
                 RETURNING t.id, t.organization_id, t.from_account_id, t.to_account_id, t.amount, t.currency,
-                          t.transaction_kind, t.status, t.failure_reason, t.idempotency_key, t.environment, t.description, t.external_recipient_id, t.reference_id, t.created_at, t.updated_at
+                          t.transaction_kind, t.status, t.failure_reason, t.idempotency_key, t.environment, t.description, t.external_recipient_id, t.reference_id, t.retry_count, t.last_attempted_at, t.next_retry_at, t.terminal_failure_at, t.created_at, t.updated_at
                 "#,
             )
             .bind(older_secs)
@@ -390,6 +440,60 @@ impl TransactionRepository {
         Ok(Self::row_to_transaction(&row)?)
     }
 
+    pub async fn schedule_retry(
+        executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
+        id: Uuid,
+        failure_reason: &str,
+        next_retry_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Transaction, AppError> {
+        let row = sqlx::query(
+            r#"
+            UPDATE transactions
+            SET status = 'pending',
+                failure_reason = $2,
+                next_retry_at = $3,
+                terminal_failure_at = NULL,
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING id, organization_id, from_account_id, to_account_id, amount, currency,
+                      transaction_kind, status, failure_reason, idempotency_key, environment, description, external_recipient_id, reference_id, retry_count, last_attempted_at, next_retry_at, terminal_failure_at, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(failure_reason)
+        .bind(next_retry_at)
+        .fetch_one(executor)
+        .await?;
+
+        Ok(Self::row_to_transaction(&row)?)
+    }
+
+    pub async fn mark_terminal_failure(
+        executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
+        id: Uuid,
+        failure_reason: &str,
+    ) -> Result<Transaction, AppError> {
+        let row = sqlx::query(
+            r#"
+            UPDATE transactions
+            SET status = 'failed',
+                failure_reason = $2,
+                next_retry_at = NULL,
+                terminal_failure_at = NOW(),
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING id, organization_id, from_account_id, to_account_id, amount, currency,
+                      transaction_kind, status, failure_reason, idempotency_key, environment, description, external_recipient_id, reference_id, retry_count, last_attempted_at, next_retry_at, terminal_failure_at, created_at, updated_at
+            "#,
+        )
+        .bind(id)
+        .bind(failure_reason)
+        .fetch_one(executor)
+        .await?;
+
+        Ok(Self::row_to_transaction(&row)?)
+    }
+
     pub fn row_to_transaction(row: &sqlx::postgres::PgRow) -> Result<Transaction, AppError> {
         let kind_str: String = row.get("transaction_kind");
         let transaction_kind = match kind_str.as_str() {
@@ -423,6 +527,10 @@ impl TransactionRepository {
             description: row.try_get("description").ok().flatten(),
             external_recipient_id: row.try_get("external_recipient_id").ok().flatten(),
             reference_id: row.try_get("reference_id").ok().flatten(),
+            retry_count: row.try_get("retry_count").unwrap_or(0),
+            last_attempted_at: row.try_get("last_attempted_at").ok().flatten(),
+            next_retry_at: row.try_get("next_retry_at").ok().flatten(),
+            terminal_failure_at: row.try_get("terminal_failure_at").ok().flatten(),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         })
