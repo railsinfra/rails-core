@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "description": "Backend services shipped in this repository (under services/).",
+  "description": "Backend services shipped in this repository.",
   "services": [
     {
       "id": "users-service",
@@ -18,7 +18,7 @@
     },
     {
       "id": "ledger-service",
-      "path": "services/ledger-service",
+      "path": "ledger-service",
       "language": "ruby",
       "summary": "Double-entry ledger, financial finality",
       "ports": { "http": 3000, "grpc": 50053 }

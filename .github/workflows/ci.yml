@@ -116,14 +116,14 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ledger_test
     defaults:
       run:
-        working-directory: services/ledger-service
+        working-directory: ledger-service
     steps:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: ${{ env.RUBY_VERSION }}
           bundler-cache: true
-          working-directory: services/ledger-service
+          working-directory: ledger-service
       - run: bundle exec rails db:test:prepare test
 
   # SonarQube scan disabled for now; keep Rust + Ledger coverage and Codecov uploads.
@@ -209,10 +209,10 @@ jobs:
         with:
           ruby-version: ${{ env.RUBY_VERSION }}
           bundler-cache: true
-          working-directory: services/ledger-service
+          working-directory: ledger-service
 
       - name: Ledger coverage (Rails tests)
-        working-directory: services/ledger-service
+        working-directory: ledger-service
         env:
           COVERAGE: "true"
         run: bundle exec rails db:test:prepare test
@@ -227,7 +227,7 @@ jobs:
             coverage-rust/users.lcov.info,
             coverage-rust/accounts.lcov.info,
             coverage-rust/audit.lcov.info,
-            services/ledger-service/coverage/lcov.info
+            ledger-service/coverage/lcov.info
 
       # - name: SonarQube Scan
       #   uses: SonarSource/sonarqube-scan-action@v6
@@ -240,9 +240,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [users-service, accounts-service, audit-service, ledger-service]
+        include:
+          - service: users-service
+            path: services/users-service
+          - service: accounts-service
+            path: services/accounts-service
+          - service: audit-service
+            path: services/audit-service
+          - service: ledger-service
+            path: ledger-service
     steps:
       - uses: actions/checkout@v4
       - name: Build image
-        working-directory: services/${{ matrix.service }}
+        working-directory: ${{ matrix.path }}
         run: docker build -t "${{ matrix.service }}:ci" .
