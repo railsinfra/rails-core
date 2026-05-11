@@ -51,9 +51,13 @@ pub fn register_routes(db: Db, grpc: GrpcClients, email: Option<EmailService>) -
         .route("/api/v1/api-keys/:api_key_id/revoke", post(apikey::revoke_api_key))
         .route("/api/v1/me", get(user::me));
 
+    let sdk_public = Router::new()
+        .route("/api/v1/users", post(user::create_user));
+
     public
         .merge(auth_limited)
         .merge(protected)
+        .merge(sdk_public)
         .layer(from_fn(correlation_id_middleware))
         .layer(from_fn(internal_caller_middleware))
         .with_state(state)

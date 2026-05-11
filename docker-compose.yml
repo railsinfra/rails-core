@@ -39,6 +39,7 @@ services:
       AUDIT_DATABASE_URL: ${AUDIT_DATABASE_URL}
       SERVER_ADDR: "0.0.0.0:8080"
       GRPC_PORT: "50054"
+      USERS_GRPC_URL: http://users-service:50051
       RUST_LOG: ${RUST_LOG:-info}
     command: bash -c "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y -qq protobuf-compiler curl && cargo run --release"
     expose:

@@ -9,6 +9,7 @@ use tracing_subscriber::prelude::*;
 use crate::config::Config;
 use crate::grpc_server::AuditGrpcService;
 use crate::routes::router;
+use crate::users_grpc::UsersGrpc;
 
 pub async fn run() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
@@ -68,7 +69,8 @@ pub async fn run() -> anyhow::Result<()> {
     let grpc_addr: SocketAddr = ([0, 0, 0, 0], config.grpc_port).into();
 
     let listener = TcpListener::bind(addr).await?;
-    let app = router();
+    let users_grpc = UsersGrpc::connect_lazy(&config.users_grpc_url)?;
+    let app = router(pool.clone(), users_grpc, config.internal_token.clone());
     let grpc_svc = AuditGrpcService::new(pool.clone()).into_server();
 
     let http_task = async move {

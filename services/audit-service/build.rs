@@ -5,9 +5,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest_dir = PathBuf::from(std::env::var(CARGO_MANIFEST_DIR_ENV)?);
     let proto_root = manifest_dir.join("../../proto");
     let audit_proto = proto_root.join("audit/v1/audit.proto");
+    let users_proto_root = manifest_dir.join("proto");
+    let users_proto = users_proto_root.join("users.proto");
+
     tonic_build::configure()
         .build_server(true)
         .build_client(true)
         .compile_protos(&[audit_proto], &[proto_root])?;
+
+    tonic_build::configure()
+        .build_server(false)
+        .build_client(true)
+        .compile_protos(&[users_proto], &[users_proto_root])?;
     Ok(())
 }

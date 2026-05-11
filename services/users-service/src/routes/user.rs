@@ -1,14 +1,31 @@
 use axum::{Json, extract::State};
+use argon2::password_hash::{rand_core::OsRng, SaltString};
+use argon2::{Argon2, PasswordHasher};
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use crate::error::AppError;
 use crate::routes::AppState;
-use crate::auth::AuthContext;
-use serde::Serialize;
+use crate::auth::{ApiKeyOnlyContext, AuthContext};
 use sqlx::Row;
 
 /// Normalize email for storage and lookup: trim and lowercase.
 pub(crate) fn normalize_email(email: &str) -> String {
     email.trim().to_lowercase()
+}
+
+#[derive(Deserialize)]
+pub struct CreateUserRequest {
+    pub first_name: String,
+    pub last_name: String,
+    pub email: String,
+    pub password: String,
+}
+
+#[derive(Serialize)]
+pub struct CreateUserResponse {
+    pub user_id: Uuid,
+    pub status: String,
 }
 
 #[derive(Serialize)]
@@ -46,6 +63,73 @@ pub struct MeResponse {
     pub user: MeUser,
     pub business: MeBusiness,
     pub environment: MeEnvironment,
+}
+
+pub async fn create_user(
+    State(state): State<AppState>,
+    ctx: ApiKeyOnlyContext,
+    Json(payload): Json<CreateUserRequest>,
+) -> Result<Json<CreateUserResponse>, AppError> {
+    let email = normalize_email(&payload.email);
+    if email.is_empty() {
+        return Err(AppError::BadRequest("Email is required.".to_string()));
+    }
+    if payload.first_name.trim().is_empty() {
+        return Err(AppError::BadRequest("First name is required.".to_string()));
+    }
+    if payload.last_name.trim().is_empty() {
+        return Err(AppError::BadRequest("Last name is required.".to_string()));
+    }
+    if payload.password.is_empty() {
+        return Err(AppError::BadRequest("Password is required.".to_string()));
+    }
+
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)"
+    )
+    .bind(&email)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|_| AppError::Internal)?;
+    if exists {
+        return Err(AppError::Conflict(crate::error::DUPLICATE_EMAIL_MESSAGE.to_string()));
+    }
+
+    let salt = SaltString::generate(&mut OsRng);
+    let password_hash = Argon2::default()
+        .hash_password(payload.password.as_bytes(), &salt)
+        .map_err(|_| AppError::Internal)?
+        .to_string();
+
+    let user_id = Uuid::new_v4();
+    let now = Utc::now();
+    sqlx::query(
+        "INSERT INTO users (id, business_id, environment_id, first_name, last_name, email, password_hash, role, status, created_at, updated_at, created_by_api_key_id) VALUES ($1, $2, $3, $4, $5, $6, $7, 'member', 'active', $8, $8, $9)"
+    )
+    .bind(&user_id)
+    .bind(ctx.business_id)
+    .bind(ctx.environment_id)
+    .bind(payload.first_name.trim())
+    .bind(payload.last_name.trim())
+    .bind(&email)
+    .bind(&password_hash)
+    .bind(now)
+    .bind(ctx.api_key_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| {
+        if let Some(db_err) = e.as_database_error() {
+            if db_err.message().contains("unique_email") {
+                return AppError::Conflict(crate::error::DUPLICATE_EMAIL_MESSAGE.to_string());
+            }
+        }
+        AppError::Internal
+    })?;
+
+    Ok(Json(CreateUserResponse {
+        user_id,
+        status: "active".to_string(),
+    }))
 }
 
 pub async fn me(
