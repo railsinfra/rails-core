@@ -21,7 +21,7 @@ module Api
           end
 
           render json: {
-            transactions: transactions.map { |tx|
+            transactions: transactions.map do |tx|
               {
                 id: tx.id,
                 organization_id: tx.organization_id,
@@ -32,7 +32,7 @@ module Api
                 failure_reason: tx.failure_reason,
                 created_at: tx.created_at.iso8601,
                 updated_at: tx.updated_at.iso8601,
-                entries: tx.ledger_entries.map { |entry|
+                entries: tx.ledger_entries.map do |entry|
                   {
                     id: entry.id,
                     ledger_account_id: entry.ledger_account_id,
@@ -41,9 +41,9 @@ module Api
                     amount: entry.amount,
                     currency: entry.currency
                   }
-                }
+                end
               }
-            }
+            end
           }
         end
 
@@ -69,7 +69,7 @@ module Api
             failure_reason: transaction.failure_reason,
             created_at: transaction.created_at.iso8601,
             updated_at: transaction.updated_at.iso8601,
-            entries: transaction.ledger_entries.map { |entry|
+            entries: transaction.ledger_entries.map do |entry|
               {
                 id: entry.id,
                 ledger_account_id: entry.ledger_account_id,
@@ -79,7 +79,7 @@ module Api
                 currency: entry.currency,
                 created_at: entry.created_at.iso8601
               }
-            }
+            end
           }
         end
 

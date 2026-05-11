@@ -49,17 +49,7 @@ pub async fn insert_pending_deposit(
     created_age: Duration,
 ) -> Uuid {
     let acc = Uuid::new_v4();
-    insert_pending_row(
-        pool,
-        org,
-        acc,
-        acc,
-        "deposit",
-        idem,
-        Some(env),
-        created_age,
-    )
-    .await
+    insert_pending_row(pool, org, acc, acc, "deposit", idem, Some(env), created_age).await
 }
 
 pub async fn insert_pending_tx_kind(
@@ -90,6 +80,22 @@ pub async fn mark_posting_stale_30s(pool: &PgPool, id: Uuid) {
         "UPDATE transactions SET status = 'posting', updated_at = NOW() - interval '30 seconds' WHERE id = $1",
     )
     .bind(id)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+pub async fn set_next_retry_at_future(pool: &PgPool, id: Uuid, delay: Duration) {
+    let delay_secs: i64 = delay.num_seconds().max(1);
+    sqlx::query(
+        r#"
+        UPDATE transactions
+        SET next_retry_at = NOW() + ($2 * INTERVAL '1 second')
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .bind(delay_secs)
     .execute(pool)
     .await
     .unwrap();

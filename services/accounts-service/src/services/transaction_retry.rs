@@ -1,4 +1,5 @@
 use chrono::Duration;
+use chrono::Utc;
 use sqlx::PgPool;
 use std::time::Duration as StdDuration;
 use tracing::{info, warn};
@@ -35,6 +36,39 @@ fn stale_posting_duration() -> Duration {
     Duration::seconds(stale_posting_secs_from_env())
 }
 
+pub(crate) fn retry_max_attempts_from_env() -> i32 {
+    const LEDGER_RETRY_MAX_ATTEMPTS_ENV: &str = "LEDGER_RETRY_MAX_ATTEMPTS";
+    std::env::var(LEDGER_RETRY_MAX_ATTEMPTS_ENV)
+        .ok()
+        .and_then(|v| v.parse::<i32>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(8)
+}
+
+fn retry_base_delay_ms_from_env() -> u64 {
+    const LEDGER_RETRY_BASE_DELAY_MS_ENV: &str = "LEDGER_RETRY_BASE_DELAY_MS";
+    std::env::var(LEDGER_RETRY_BASE_DELAY_MS_ENV)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(500)
+}
+
+fn retry_max_delay_ms_from_env() -> u64 {
+    const LEDGER_RETRY_MAX_DELAY_MS_ENV: &str = "LEDGER_RETRY_MAX_DELAY_MS";
+    std::env::var(LEDGER_RETRY_MAX_DELAY_MS_ENV)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(300_000)
+}
+
+pub(crate) fn compute_retry_delay_ms(attempt: i32, base_ms: u64, max_ms: u64) -> u64 {
+    let safe_max = max_ms.max(base_ms);
+    let exp = (attempt.max(1) - 1).min(16) as u32;
+    base_ms.saturating_mul(2u64.saturating_pow(exp)).min(safe_max)
+}
+
 /// One retry-worker iteration: claim a batch, post claimed rows, then idle sleep.
 pub(crate) async fn retry_worker_poll_once(
     pool: &PgPool,
@@ -59,32 +93,41 @@ pub(crate) async fn retry_worker_poll_once(
 }
 
 /// Posts rows already moved to `posting` by [`TransactionRepository::claim_pending_transactions_for_ledger_post`].
-pub async fn process_claimed_ledger_posts(pool: &PgPool, ledger_grpc: &LedgerGrpc, pending: Vec<Transaction>) {
+pub async fn process_claimed_ledger_posts(
+    pool: &PgPool,
+    ledger_grpc: &LedgerGrpc,
+    pending: Vec<Transaction>,
+) {
     for tx in pending {
         let environment = if let Some(ref env) = tx.environment {
             env.clone()
         } else {
-            let account = match AccountRepository::find_by_id(pool, tx.from_account_id, "sandbox").await {
-                Ok(a) => a,
-                Err(_) => match AccountRepository::find_by_id(pool, tx.from_account_id, "production").await {
+            let account =
+                match AccountRepository::find_by_id(pool, tx.from_account_id, "sandbox").await {
                     Ok(a) => a,
-                    Err(e) => {
-                        warn!(
-                            transaction_id = %tx.id,
-                            error = %e,
-                            "retry_worker_missing_account; releasing posting row"
-                        );
-                        let _ = TransactionRepository::update_status(
-                            pool,
-                            tx.id,
-                            TransactionStatus::Pending,
-                            Some("retry_worker: could not resolve account environment"),
-                        )
-                        .await;
-                        continue;
+                    Err(_) => {
+                        match AccountRepository::find_by_id(pool, tx.from_account_id, "production")
+                            .await
+                        {
+                            Ok(a) => a,
+                            Err(e) => {
+                                warn!(
+                                    transaction_id = %tx.id,
+                                    error = %e,
+                                    "retry_worker_missing_account; releasing posting row"
+                                );
+                                let _ = TransactionRepository::update_status(
+                                    pool,
+                                    tx.id,
+                                    TransactionStatus::Pending,
+                                    Some("retry_worker: could not resolve account environment"),
+                                )
+                                .await;
+                                continue;
+                            }
+                        }
                     }
-                },
-            };
+                };
 
             account
                 .environment
@@ -93,10 +136,9 @@ pub async fn process_claimed_ledger_posts(pool: &PgPool, ledger_grpc: &LedgerGrp
         };
 
         let (source_external, dest_external) = match tx.transaction_kind {
-            TransactionKind::Transfer => (
-                tx.from_account_id.to_string(),
-                tx.to_account_id.to_string(),
-            ),
+            TransactionKind::Transfer => {
+                (tx.from_account_id.to_string(), tx.to_account_id.to_string())
+            }
             TransactionKind::Deposit => (
                 "SYSTEM_CASH_CONTROL".to_string(),
                 tx.to_account_id.to_string(),
@@ -123,17 +165,42 @@ pub async fn process_claimed_ledger_posts(pool: &PgPool, ledger_grpc: &LedgerGrp
 
         match post_result {
             Ok(()) => {
-                let _ = TransactionRepository::update_status(pool, tx.id, TransactionStatus::Posted, None).await;
-            }
-            Err(e) => {
-                let reason = format!("{}", e);
                 let _ = TransactionRepository::update_status(
                     pool,
                     tx.id,
-                    TransactionStatus::Pending,
-                    Some(&reason),
+                    TransactionStatus::Posted,
+                    None,
                 )
                 .await;
+            }
+            Err(e) => {
+                let reason = format!("{}", e);
+                let max_attempts = retry_max_attempts_from_env();
+                if tx.retry_count >= max_attempts {
+                    warn!(
+                        transaction_id = %tx.id,
+                        retry_count = tx.retry_count,
+                        max_attempts,
+                        "retry_worker_marking_terminal_failure"
+                    );
+                    let _ = TransactionRepository::mark_terminal_failure(pool, tx.id, &reason).await;
+                } else {
+                    let delay_ms = compute_retry_delay_ms(
+                        tx.retry_count,
+                        retry_base_delay_ms_from_env(),
+                        retry_max_delay_ms_from_env(),
+                    );
+                    let next_retry_at = Utc::now() + Duration::milliseconds(delay_ms as i64);
+                    warn!(
+                        transaction_id = %tx.id,
+                        retry_count = tx.retry_count,
+                        delay_ms,
+                        "retry_worker_scheduling_retry"
+                    );
+                    let _ =
+                        TransactionRepository::schedule_retry(pool, tx.id, &reason, next_retry_at)
+                            .await;
+                }
             }
         }
     }
@@ -188,6 +255,10 @@ mod claim_outcome_tests {
             description: None,
             external_recipient_id: None,
             reference_id: None,
+            retry_count: 0,
+            last_attempted_at: None,
+            next_retry_at: None,
+            terminal_failure_at: None,
             created_at: now,
             updated_at: now,
         };
@@ -199,11 +270,9 @@ mod claim_outcome_tests {
 
     #[tokio::test]
     async fn claim_outcome_err_returns_none_after_sleep() {
-        let out = handle_retry_claim_outcome(
-            Err(AppError::Internal("db down".into())),
-            Duration::ZERO,
-        )
-        .await;
+        let out =
+            handle_retry_claim_outcome(Err(AppError::Internal("db down".into())), Duration::ZERO)
+                .await;
         assert!(out.is_none());
     }
 }
@@ -289,7 +358,9 @@ mod poll_smoke {
         let ledger = LedgerGrpc::new("http://127.0.0.1:9".to_string());
         retry_worker_poll_once(&pool, &ledger, StdDuration::ZERO, StdDuration::ZERO).await;
 
-        let row = TransactionRepository::find_by_id(&pool, id).await.expect("row");
+        let row = TransactionRepository::find_by_id(&pool, id)
+            .await
+            .expect("row");
         assert_eq!(row.status, TransactionStatus::Pending);
         assert!(row.failure_reason.unwrap_or_default().len() > 0);
     }
@@ -311,12 +382,13 @@ mod poll_smoke {
 
 #[cfg(test)]
 mod stale_secs_tests {
-    use super::stale_posting_secs_from_env;
+    use super::{compute_retry_delay_ms, retry_max_attempts_from_env, stale_posting_secs_from_env};
     use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     const ENV_KEY: &str = "TRANSACTION_POSTING_STALE_AFTER_SECS";
+    const RETRY_ATTEMPTS_KEY: &str = "LEDGER_RETRY_MAX_ATTEMPTS";
 
     #[test]
     fn stale_secs_default_when_unset() {
@@ -349,5 +421,28 @@ mod stale_secs_tests {
         std::env::set_var(ENV_KEY, "not-a-number");
         assert_eq!(stale_posting_secs_from_env(), 600);
         std::env::remove_var(ENV_KEY);
+    }
+
+    #[test]
+    fn retry_attempts_default_when_unset() {
+        let _g = ENV_LOCK.lock().unwrap();
+        std::env::remove_var(RETRY_ATTEMPTS_KEY);
+        assert_eq!(retry_max_attempts_from_env(), 8);
+    }
+
+    #[test]
+    fn retry_attempts_from_env() {
+        let _g = ENV_LOCK.lock().unwrap();
+        std::env::set_var(RETRY_ATTEMPTS_KEY, "12");
+        assert_eq!(retry_max_attempts_from_env(), 12);
+        std::env::remove_var(RETRY_ATTEMPTS_KEY);
+    }
+
+    #[test]
+    fn compute_retry_delay_doubles_and_caps() {
+        assert_eq!(compute_retry_delay_ms(1, 500, 300_000), 500);
+        assert_eq!(compute_retry_delay_ms(2, 500, 300_000), 1_000);
+        assert_eq!(compute_retry_delay_ms(3, 500, 300_000), 2_000);
+        assert_eq!(compute_retry_delay_ms(20, 500, 3_000), 3_000);
     }
 }

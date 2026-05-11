@@ -41,12 +41,15 @@ audit-service/
 │   └── routes/              # HTTP routes (health)
 ├── migrations/              # SQL migrations (audit_events)
 ├── tests/                   # Integration tests (e.g. Postgres + gRPC E2E)
-├── build.rs                 # Protobuf build (shared repo proto)
+├── Dockerfile               # Docker / Railway (build context = this directory)
+├── proto/                   # Vendored `audit.proto` for Docker / crate-local builds; keep in sync with `proto/audit/v1/audit.proto` at repo root
+├── railway.toml             # Railway config-as-code (optional)
+├── build.rs                 # Protobuf codegen (vendored `proto/` or repo-root `../../proto` when developing from monorepo)
 ├── Cargo.toml
 └── README.md                # This file
 ```
 
-Proto definitions live at repo root: `proto/audit/v1/audit.proto`.
+Canonical contract: `proto/audit/v1/audit.proto` at repository root. This crate also ships `proto/audit/v1/audit.proto` (same contents) so `docker build .` and `cargo build` work with **this folder** as context; after editing the root file, copy it here (`cp ../../proto/audit/v1/audit.proto proto/audit/v1/audit.proto`).
 
 ## Setup
 

@@ -17,6 +17,7 @@ use crate::grpc::audit_proto::ActorType;
 use crate::models::{
     Account, AccountResponse, AccountTransactionResponse, CreateAccountRequest,
     PaginatedAccountsResponse, UpdateAccountRequest,
+    TransactionStatus,
 };
 use crate::routes::api::AppState;
 use crate::services::AccountService;
@@ -89,6 +90,14 @@ fn log_money_request_boundary(
         elapsed_ms = elapsed_ms.unwrap_or(0),
         "{banner}"
     );
+}
+
+fn mutation_http_status(status: TransactionStatus) -> StatusCode {
+    match status {
+        TransactionStatus::Posted => StatusCode::OK,
+        TransactionStatus::Pending | TransactionStatus::Posting => StatusCode::ACCEPTED,
+        TransactionStatus::Failed => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
 
 fn spawn_audit_emit(
@@ -298,7 +307,7 @@ pub async fn list_accounts(
 
     // Parse and validate pagination params with defaults
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(10).min(100).max(1);
+    let per_page = query.per_page.unwrap_or(10).clamp(1, 100);
 
     // Support three filtering options:
     // 1. user_id: Get accounts owned by a specific user
@@ -514,7 +523,7 @@ pub async fn deposit(
     )
     .await;
     let deposit_status = match &deposit_result {
-        Ok(_) => 200u16,
+        Ok((_, tx)) => mutation_http_status(tx.status).as_u16(),
         Err(e) => crate::audit_emit::http_status_for_error(e),
     };
     log_money_request_boundary(
@@ -544,7 +553,7 @@ pub async fn deposit(
             );
         }
         let http_st = match &deposit_result {
-            Ok(_) => 200u16,
+            Ok((_, tx)) => mutation_http_status(tx.status).as_u16(),
             Err(e) => crate::audit_emit::http_status_for_error(e),
         };
         let reason = deposit_result
@@ -600,7 +609,7 @@ pub async fn deposit(
     let txn_resp =
         AccountTransactionResponse::for_mutation_response(&transaction, account_resp.balance);
     Ok((
-        StatusCode::OK,
+        mutation_http_status(transaction.status),
         Json(serde_json::json!({
             "account": account_resp,
             "transaction": txn_resp
@@ -668,7 +677,7 @@ pub async fn withdraw(
             );
         }
         let http_st = match &withdraw_result {
-            Ok(_) => 200u16,
+            Ok((_, tx)) => mutation_http_status(tx.status).as_u16(),
             Err(e) => crate::audit_emit::http_status_for_error(e),
         };
         let reason = withdraw_result
@@ -724,7 +733,7 @@ pub async fn withdraw(
     let txn_resp =
         AccountTransactionResponse::for_mutation_response(&transaction, account_resp.balance);
     Ok((
-        StatusCode::OK,
+        mutation_http_status(transaction.status),
         Json(serde_json::json!({
             "account": account_resp,
             "transaction": txn_resp
@@ -786,7 +795,7 @@ pub async fn transfer(
     )
     .await;
     let transfer_status = match &transfer_result {
-        Ok(_) => 200u16,
+        Ok((_, _, tx)) => mutation_http_status(tx.status).as_u16(),
         Err(e) => crate::audit_emit::http_status_for_error(e),
     };
     log_money_request_boundary(
@@ -816,7 +825,7 @@ pub async fn transfer(
             );
         }
         let http_st = match &transfer_result {
-            Ok(_) => 200u16,
+            Ok((_, _, tx)) => mutation_http_status(tx.status).as_u16(),
             Err(e) => crate::audit_emit::http_status_for_error(e),
         };
         let reason = transfer_result
@@ -949,7 +958,7 @@ pub async fn transfer(
     let txn_resp =
         AccountTransactionResponse::for_mutation_response(&transaction, from_resp.balance);
     Ok((
-        StatusCode::OK,
+        mutation_http_status(transaction.status),
         Json(serde_json::json!({
             "from_account": from_resp,
             "to_account": to_resp,
@@ -1072,5 +1081,22 @@ mod tests {
             r#"{"to_account_id": "550e8400-e29b-41d4-a716-446655440000", "amount": "50.50"}"#;
         let req: TransferRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.amount, 5050);
+    }
+
+    #[test]
+    fn mutation_http_status_mapping() {
+        assert_eq!(mutation_http_status(TransactionStatus::Posted), StatusCode::OK);
+        assert_eq!(
+            mutation_http_status(TransactionStatus::Pending),
+            StatusCode::ACCEPTED
+        );
+        assert_eq!(
+            mutation_http_status(TransactionStatus::Posting),
+            StatusCode::ACCEPTED
+        );
+        assert_eq!(
+            mutation_http_status(TransactionStatus::Failed),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 }

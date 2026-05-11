@@ -3,13 +3,21 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
+
+_CURL = shutil.which("curl")
+if _CURL is None:
+    raise RuntimeError(
+        "curl is required for gateway health checks but was not found on PATH. "
+        "Install curl or add it to PATH."
+    )
 
 
 def _curl_body(url: str) -> tuple[int, str]:
     r = subprocess.run(
-        ["curl", "-fsS", "--max-time", "10", url],
+        [_CURL, "-fsS", "--max-time", "10", url],
         capture_output=True,
         text=True,
     )
@@ -57,7 +65,7 @@ def main() -> int:
 
     docs = f"{base}/docs/"
     r = subprocess.run(
-        ["curl", "-fsS", "--max-time", "10", docs],
+        [_CURL, "-fsS", "--max-time", "10", docs],
         capture_output=True,
         text=True,
     )

@@ -1,14 +1,190 @@
+use std::collections::HashMap;
+use std::net::SocketAddr;
+
+use argon2::password_hash::rand_core::OsRng;
+use argon2::password_hash::SaltString;
+use argon2::{Argon2, PasswordHasher};
+use axum::extract::ConnectInfo;
+use axum::http::HeaderMap;
 use axum::{Json, extract::State};
-use uuid::Uuid;
-use crate::error::AppError;
-use crate::routes::AppState;
-use crate::auth::AuthContext;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use uuid::Uuid;
+
+use crate::audit_emit;
+use crate::auth::{ApiKeyOnlyContext, AuthContext};
+use crate::error::{AppError, DUPLICATE_EMAIL_MESSAGE};
+use crate::grpc::audit_proto::ActorType;
+use crate::routes::AppState;
 
 /// Normalize email for storage and lookup: trim and lowercase.
 pub(crate) fn normalize_email(email: &str) -> String {
     email.trim().to_lowercase()
+}
+
+const SDK_USER_MIN_PASSWORD_LEN: usize = 8;
+
+/// Validates SDK `POST /api/v1/users` body (trimmed names, normalized email, password length).
+pub(crate) fn validate_sdk_user_payload(
+    email: &str,
+    first_name: &str,
+    last_name: &str,
+    password: &str,
+) -> Result<(String, String, String), AppError> {
+    let email = normalize_email(email);
+    if email.is_empty() {
+        return Err(AppError::BadRequest("Email is required.".to_string()));
+    }
+    let first_name = first_name.trim().to_string();
+    if first_name.is_empty() {
+        return Err(AppError::BadRequest("First name is required.".to_string()));
+    }
+    let last_name = last_name.trim().to_string();
+    if last_name.is_empty() {
+        return Err(AppError::BadRequest("Last name is required.".to_string()));
+    }
+    if password.len() < SDK_USER_MIN_PASSWORD_LEN {
+        return Err(AppError::BadRequest(format!(
+            "Password must be at least {SDK_USER_MIN_PASSWORD_LEN} characters."
+        )));
+    }
+    Ok((email, first_name, last_name))
+}
+
+#[derive(Deserialize)]
+pub struct CreateSdkUserRequest {
+    pub email: String,
+    pub first_name: String,
+    pub last_name: String,
+    pub password: String,
+}
+
+#[derive(Serialize)]
+pub struct CreateSdkUserResponse {
+    pub status: String,
+    pub user_id: Uuid,
+}
+
+async fn create_sdk_user_inner(
+    state: AppState,
+    ctx: ApiKeyOnlyContext,
+    Json(payload): Json<CreateSdkUserRequest>,
+) -> Result<CreateSdkUserResponse, AppError> {
+    let (email, first_name, last_name) = validate_sdk_user_payload(
+        &payload.email,
+        &payload.first_name,
+        &payload.last_name,
+        &payload.password,
+    )?;
+
+    let exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)")
+        .bind(&email)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|_| AppError::Internal)?;
+    if exists {
+        return Err(AppError::Conflict(DUPLICATE_EMAIL_MESSAGE.to_string()));
+    }
+
+    let user_id = Uuid::new_v4();
+    let salt = SaltString::generate(&mut OsRng);
+    let password_hash = Argon2::default()
+        .hash_password(payload.password.as_bytes(), &salt)
+        .map_err(|_| AppError::Internal)?
+        .to_string();
+
+    sqlx::query(
+        r#"INSERT INTO users (
+            id, business_id, environment_id, first_name, last_name, email, password_hash,
+            role, status, created_at, updated_at, created_by_user_id, created_by_api_key_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'user', 'active', NOW(), NOW(), NULL, $8)"#,
+    )
+    .bind(&user_id)
+    .bind(&ctx.business_id)
+    .bind(&ctx.environment_id)
+    .bind(&first_name)
+    .bind(&last_name)
+    .bind(&email)
+    .bind(&password_hash)
+    .bind(&ctx.api_key_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| {
+        if let Some(db_err) = e.as_database_error() {
+            if db_err.message().contains("unique_email") {
+                return AppError::Conflict(DUPLICATE_EMAIL_MESSAGE.to_string());
+            }
+        }
+        AppError::Internal
+    })?;
+
+    Ok(CreateSdkUserResponse {
+        status: "active".to_string(),
+        user_id,
+    })
+}
+
+pub async fn create_sdk_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ctx: ApiKeyOnlyContext,
+    Json(payload): Json<CreateSdkUserRequest>,
+) -> Result<Json<CreateSdkUserResponse>, AppError> {
+    const PATH: &str = "/api/v1/users";
+    const ACTION: &str = "users.sdk.user.create";
+    let business_id = ctx.business_id;
+    let api_key_id = ctx.api_key_id;
+    let out = create_sdk_user_inner(state.clone(), ctx, Json(payload)).await;
+    let mut meta = HashMap::new();
+    meta.insert("api_key_id".to_string(), api_key_id.to_string());
+    match &out {
+        Ok(body) => {
+            audit_emit::emit_users_mutation(
+                &state.grpc,
+                &headers,
+                &peer,
+                "POST",
+                PATH,
+                ACTION,
+                business_id,
+                ActorType::Anonymous,
+                "",
+                vec![],
+                "user",
+                body.user_id,
+                200,
+                None,
+                meta,
+            )
+            .await;
+        }
+        Err(e) => {
+            meta.insert(
+                "http_status".into(),
+                audit_emit::http_status_for_error(e).to_string(),
+            );
+            audit_emit::emit_users_mutation(
+                &state.grpc,
+                &headers,
+                &peer,
+                "POST",
+                PATH,
+                ACTION,
+                business_id,
+                ActorType::Anonymous,
+                "",
+                vec![],
+                "user",
+                Uuid::nil(),
+                audit_emit::http_status_for_error(e),
+                Some(audit_emit::truncate_reason(&e.to_string())),
+                meta,
+            )
+            .await;
+        }
+    }
+    out.map(Json)
 }
 
 #[derive(Serialize)]
@@ -154,8 +330,8 @@ pub async fn me(
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_email;
-    use crate::error::DUPLICATE_EMAIL_MESSAGE;
+    use super::{normalize_email, validate_sdk_user_payload};
+    use crate::error::{AppError, DUPLICATE_EMAIL_MESSAGE};
 
     #[test]
     fn normalize_email_trims_and_lowercases() {
@@ -172,5 +348,38 @@ mod tests {
             DUPLICATE_EMAIL_MESSAGE.contains("signing in") || DUPLICATE_EMAIL_MESSAGE.contains("reset"),
             "Message should suggest sign in or password reset"
         );
+    }
+
+    #[test]
+    fn validate_sdk_user_payload_rejects_empty_email() {
+        let e = validate_sdk_user_payload("  ", "A", "B", "password123!").unwrap_err();
+        assert!(matches!(e, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn validate_sdk_user_payload_rejects_empty_first_name() {
+        let e = validate_sdk_user_payload("a@b.com", "  ", "B", "password123!").unwrap_err();
+        assert!(matches!(e, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn validate_sdk_user_payload_rejects_empty_last_name() {
+        let e = validate_sdk_user_payload("a@b.com", "A", "\t", "password123!").unwrap_err();
+        assert!(matches!(e, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn validate_sdk_user_payload_rejects_short_password() {
+        let e = validate_sdk_user_payload("a@b.com", "A", "B", "short7!").unwrap_err();
+        assert!(matches!(e, AppError::BadRequest(_)));
+    }
+
+    #[test]
+    fn validate_sdk_user_payload_accepts_valid_input() {
+        let (em, f, l) =
+            validate_sdk_user_payload("  User@EX.com ", "  Pat ", " Lee ", "password123!").unwrap();
+        assert_eq!(em, "user@ex.com");
+        assert_eq!(f, "Pat");
+        assert_eq!(l, "Lee");
     }
 }

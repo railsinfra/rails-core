@@ -7,12 +7,3 @@ healthcheckPath = "/up"
 healthcheckTimeout = 60
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
-
-[[services]]
-name = "ledger-service"
-internalPort = 3000
-
-[[services]]
-name = "ledger-grpc"
-internalPort = 9090
-protocol = "grpc"

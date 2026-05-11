@@ -2,10 +2,18 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+_DOCKER = shutil.which("docker")
+if _DOCKER is None:
+    raise RuntimeError(
+        "docker is required for compose log tailing but was not found on PATH. "
+        "Install Docker CLI or add it to PATH."
+    )
 
 
 def _run_health_check(py: str, health_script: Path, *, quiet: bool) -> int:
@@ -18,7 +26,7 @@ def _run_health_check(py: str, health_script: Path, *, quiet: bool) -> int:
 def _print_tail_logs(repo: Path, env_file: Path) -> None:
     print("\n--- Last 120 lines from all services (docker compose logs) ---\n", file=sys.stderr)
     subprocess.run(
-        ["docker", "compose", "--env-file", str(env_file), "logs", "--tail=120"],
+        [_DOCKER, "compose", "--env-file", str(env_file), "logs", "--tail=120"],
         cwd=str(repo),
         check=False,
     )

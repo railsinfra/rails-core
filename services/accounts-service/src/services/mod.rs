@@ -1,4 +1,5 @@
 pub mod account_service;
+pub mod transaction_reconcile;
 pub mod transaction_service;
 pub mod transaction_retry;
 

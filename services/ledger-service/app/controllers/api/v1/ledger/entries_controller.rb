@@ -42,7 +42,7 @@ module Api
             .offset(offset)
 
           render json: {
-            data: entries.map { |entry|
+            data: entries.map do |entry|
               {
                 id: entry.id,
                 ledger_account_id: entry.ledger_account_id,
@@ -54,7 +54,7 @@ module Api
                 currency: entry.currency,
                 created_at: entry.created_at.iso8601
               }
-            },
+            end,
             pagination: {
               page: page,
               per_page: per_page,

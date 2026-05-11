@@ -50,14 +50,14 @@ export SERVER_ADDR="0.0.0.0:8080"
 export RUST_LOG="info"
 
 # API key hashing secret (required in production)
-export API_KEY_HASH_SECRET="replace_me"
+export API_KEY_HASH_SECRET="<YOUR_API_KEY_HASH_SECRET>"
 
 # Service-to-service protection (recommended)
 # Only required for the sensitive endpoints:
 # - POST /api/v1/auth/login
 # - POST /api/v1/business/register
 # Comma-separated list of allowed internal tokens.
-export INTERNAL_SERVICE_TOKEN_ALLOWLIST="replace_me"
+export INTERNAL_SERVICE_TOKEN_ALLOWLIST="<COMMA_SEPARATED_INTERNAL_TOKENS>"
 ```
 
 ### 4. Build and Run
@@ -199,10 +199,12 @@ ps aux | grep users_service
 # Check if port is listening
 lsof -i :8080
 
-# Test endpoint
+# Test endpoint (set values that match your .env allowlist and chosen admin password)
+export INTERNAL_TOKEN="<YOUR_INTERNAL_SERVICE_TOKEN>"
+export ADMIN_PW="<GENERATED_PASSWORD>"
 curl http://localhost:8080/api/v1/business/register \
   -H "x-correlation-id: local-test-1" \
-  -H "x-internal-service-token: replace_me" \
+  -H "x-internal-service-token: $INTERNAL_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"name":"Test Business","admin_email":"admin@test.com","admin_password":"password123"}'
+  -d "{\"name\":\"Test Business\",\"admin_email\":\"admin@test.com\",\"admin_password\":\"$ADMIN_PW\"}"
 ```
