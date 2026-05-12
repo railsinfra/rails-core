@@ -49,7 +49,7 @@ fn outcome_str(o: Outcome) -> &'static str {
     }
 }
 
-fn event_to_insert(event: &AuditEvent) -> Result<AuditInsert, Status> {
+pub(crate) fn event_to_insert(event: &AuditEvent) -> Result<AuditInsert, Status> {
     let occurred_at: DateTime<Utc> = DateTime::parse_from_rfc3339(&event.occurred_at)
         .map_err(|_| Status::invalid_argument("occurred_at"))?
         .with_timezone(&Utc);
@@ -57,13 +57,24 @@ fn event_to_insert(event: &AuditEvent) -> Result<AuditInsert, Status> {
     let org = Uuid::parse_str(event.organization_id.trim())
         .map_err(|_| Status::invalid_argument("organization_id"))?;
 
-    let actor = event.actor.as_ref().ok_or_else(|| Status::invalid_argument("actor"))?;
-    let actor_type = ActorType::try_from(actor.r#type).map_err(|_| Status::invalid_argument("actor.type"))?;
+    let actor = event
+        .actor
+        .as_ref()
+        .ok_or_else(|| Status::invalid_argument("actor"))?;
+    let actor_type =
+        ActorType::try_from(actor.r#type).map_err(|_| Status::invalid_argument("actor.type"))?;
 
-    let target = event.target.as_ref().ok_or_else(|| Status::invalid_argument("target"))?;
-    let req = event.request.as_ref().ok_or_else(|| Status::invalid_argument("request"))?;
+    let target = event
+        .target
+        .as_ref()
+        .ok_or_else(|| Status::invalid_argument("target"))?;
+    let req = event
+        .request
+        .as_ref()
+        .ok_or_else(|| Status::invalid_argument("request"))?;
 
-    let outcome = Outcome::try_from(event.outcome).map_err(|_| Status::invalid_argument("outcome"))?;
+    let outcome =
+        Outcome::try_from(event.outcome).map_err(|_| Status::invalid_argument("outcome"))?;
 
     let mut meta_map = Map::new();
     for (k, v) in &event.metadata {
@@ -107,7 +118,9 @@ impl AuditService for AuditGrpcService {
         let _txn_guard = txn.clone();
 
         let inner = request.into_inner();
-        let event = inner.event.ok_or_else(|| Status::invalid_argument("event required"))?;
+        let event = inner
+            .event
+            .ok_or_else(|| Status::invalid_argument("event required"))?;
 
         validate_audit_event(&event)?;
 
@@ -182,9 +195,9 @@ mod tests {
         let j = tokio::spawn(serve);
 
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let mut client = crate::proto::proto::audit_service_client::AuditServiceClient::connect(format!(
-            "http://{addr}"
-        ))
+        let mut client = crate::proto::proto::audit_service_client::AuditServiceClient::connect(
+            format!("http://{addr}"),
+        )
         .await
         .unwrap();
 

@@ -3,32 +3,32 @@ use std::net::SocketAddr;
 
 use axum::extract::ConnectInfo;
 use axum::http::HeaderMap;
-use axum::{Json, extract::State, extract::Path};
+use axum::{extract::Path, extract::State, Json};
 use uuid::Uuid;
 
 use crate::audit_emit;
+use crate::auth::{hash_api_key, AuthContext};
+use crate::error::AppError;
 use crate::grpc::audit_proto::ActorType;
-use crate::{error::AppError};
 use crate::routes::AppState;
-use crate::auth::{AuthContext, hash_api_key};
-use serde::{Deserialize, Serialize};
-use chrono::Utc;
-use sqlx::Row;
-use rand::rngs::OsRng;
-use rand::rand_core::TryRngCore;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL_ENGINE;
 use base64::Engine;
+use chrono::Utc;
+use rand::rand_core::TryRngCore;
+use rand::rngs::OsRng;
+use serde::{Deserialize, Serialize};
+use sqlx::Row;
 
 #[derive(Deserialize)]
 pub struct CreateApiKeyRequest {
-    pub environment_id: Option<Uuid>
+    pub environment_id: Option<Uuid>,
 }
 
 #[derive(Serialize)]
 pub struct CreateApiKeyResponse {
     pub id: Uuid,
     pub key: String,
-    pub status: String
+    pub status: String,
 }
 
 #[derive(Serialize)]
@@ -50,13 +50,15 @@ async fn create_api_key_inner(
 ) -> Result<(CreateApiKeyResponse, Uuid, Uuid), AppError> {
     let request_user_id = ctx.user_id.ok_or(AppError::Forbidden)?;
 
-    let role_row = sqlx::query("SELECT role FROM users WHERE id = $1 AND environment_id = $2 AND status = 'active'")
-        .bind(&request_user_id)
-        .bind(&ctx.environment_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|_| AppError::Internal)?
-        .ok_or(AppError::Forbidden)?;
+    let role_row = sqlx::query(
+        "SELECT role FROM users WHERE id = $1 AND environment_id = $2 AND status = 'active'",
+    )
+    .bind(&request_user_id)
+    .bind(&ctx.environment_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|_| AppError::Internal)?
+    .ok_or(AppError::Forbidden)?;
 
     let role: String = role_row.get("role");
     if role != "admin" {
@@ -65,7 +67,7 @@ async fn create_api_key_inner(
 
     if let Some(env_id) = payload.environment_id {
         let env_ok = sqlx::query(
-            "SELECT 1 FROM environments WHERE id = $1 AND business_id = $2 AND status = 'active'"
+            "SELECT 1 FROM environments WHERE id = $1 AND business_id = $2 AND status = 'active'",
         )
         .bind(&env_id)
         .bind(&ctx.business_id)
@@ -175,13 +177,15 @@ pub async fn list_api_keys(
     ctx: AuthContext,
 ) -> Result<Json<Vec<ApiKeyInfo>>, AppError> {
     let request_user_id = ctx.user_id.ok_or(AppError::Forbidden)?;
-    let role_row = sqlx::query("SELECT role FROM users WHERE id = $1 AND environment_id = $2 AND status = 'active'")
-        .bind(&request_user_id)
-        .bind(&ctx.environment_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|_| AppError::Internal)?
-        .ok_or(AppError::Forbidden)?;
+    let role_row = sqlx::query(
+        "SELECT role FROM users WHERE id = $1 AND environment_id = $2 AND status = 'active'",
+    )
+    .bind(&request_user_id)
+    .bind(&ctx.environment_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|_| AppError::Internal)?
+    .ok_or(AppError::Forbidden)?;
 
     let role: String = role_row.get("role");
     if role != "admin" {
@@ -219,13 +223,15 @@ async fn revoke_api_key_inner(
     Path(api_key_id): Path<Uuid>,
 ) -> Result<(CreateApiKeyResponse, Uuid, Uuid), AppError> {
     let request_user_id = ctx.user_id.ok_or(AppError::Forbidden)?;
-    let role_row = sqlx::query("SELECT role FROM users WHERE id = $1 AND environment_id = $2 AND status = 'active'")
-        .bind(&request_user_id)
-        .bind(&ctx.environment_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|_| AppError::Internal)?
-        .ok_or(AppError::Forbidden)?;
+    let role_row = sqlx::query(
+        "SELECT role FROM users WHERE id = $1 AND environment_id = $2 AND status = 'active'",
+    )
+    .bind(&request_user_id)
+    .bind(&ctx.environment_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|_| AppError::Internal)?
+    .ok_or(AppError::Forbidden)?;
 
     let role: String = role_row.get("role");
     if role != "admin" {
@@ -244,7 +250,9 @@ async fn revoke_api_key_inner(
     .map_err(|_| AppError::Internal)?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::BadRequest("API key not found or already revoked".to_string()));
+        return Err(AppError::BadRequest(
+            "API key not found or already revoked".to_string(),
+        ));
     }
 
     Ok((

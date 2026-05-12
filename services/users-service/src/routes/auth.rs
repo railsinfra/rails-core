@@ -3,15 +3,15 @@ use std::net::SocketAddr;
 
 use axum::extract::ConnectInfo;
 use axum::http::HeaderMap;
-use axum::{Json, extract::State};
+use axum::{extract::State, Json};
 
 use crate::audit_emit;
+use crate::error::AppError;
 use crate::grpc::audit_proto::ActorType;
+use crate::routes::{user, AppState};
 use argon2::password_hash::rand_core::OsRng;
 use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
 use base64::engine::Engine;
-use crate::error::AppError;
-use crate::routes::{AppState, user};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
@@ -67,11 +67,11 @@ pub struct RevokeTokenResponse {
     pub status: String,
 }
 
+use argon2::password_hash::{rand_core::RngCore, PasswordHash, PasswordVerifier};
+use chrono::{Duration, Utc};
 use jsonwebtoken::{encode, EncodingKey, Header};
-use argon2::password_hash::{PasswordHash, PasswordVerifier, rand_core::RngCore};
-use chrono::{Utc, Duration};
-use uuid::Uuid;
 use serde_json::json;
+use uuid::Uuid;
 
 async fn login_inner(
     state: AppState,
@@ -100,16 +100,23 @@ async fn login_inner(
     // 2. Verify password
     let parsed_hash = PasswordHash::new(&password_hash).map_err(|e| {
         let user_id: Uuid = user_rows[0].get("id");
-        tracing::error!("Failed to parse password hash for user_id {}: {}", user_id, e);
+        tracing::error!(
+            "Failed to parse password hash for user_id {}: {}",
+            user_id,
+            e
+        );
         AppError::Internal
     })?;
-    if argon2::Argon2::default().verify_password(payload.password.as_bytes(), &parsed_hash).is_err() {
+    if argon2::Argon2::default()
+        .verify_password(payload.password.as_bytes(), &parsed_hash)
+        .is_err()
+    {
         return Err(AppError::Unauthorized);
     }
 
     // Get business_id from first user (all users with same email should have same business_id)
     let business_id: Uuid = user_rows[0].get("business_id");
-    
+
     // Get ALL environments for the business (not just where user exists)
     // This allows users to see both sandbox and production environments
     let environments = sqlx::query(
@@ -183,8 +190,12 @@ async fn login_inner(
     });
     const JWT_SECRET_ENV: &str = "JWT_SECRET";
     let secret = std::env::var(JWT_SECRET_ENV).unwrap_or_else(|_| "dev_secret".to_string());
-    let access_token = encode(&Header::default(), &claims, &EncodingKey::from_secret(secret.as_bytes()))
-        .map_err(|_| AppError::Internal)?;
+    let access_token = encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .map_err(|_| AppError::Internal)?;
 
     // 4. Generate refresh token
     let mut refresh_bytes = [0u8; 32];
@@ -301,20 +312,18 @@ async fn refresh_token_inner(
     let environment_id: Uuid = rec.get("environment_id");
     let status: String = rec.get("status");
     let expires_at: chrono::DateTime<Utc> = rec.get("expires_at");
-    
+
     if status != "active" || expires_at < Utc::now() {
         return Err(AppError::Unauthorized);
     }
 
     // Get business_id for JWT
-    let business_row = sqlx::query(
-        "SELECT business_id FROM users WHERE id = $1"
-    )
-    .bind(&user_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|_| AppError::Internal)?
-    .ok_or(AppError::Internal)?;
+    let business_row = sqlx::query("SELECT business_id FROM users WHERE id = $1")
+        .bind(&user_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|_| AppError::Internal)?
+        .ok_or(AppError::Internal)?;
     let business_id: Uuid = business_row.get("business_id");
 
     // 2. Issue new JWT
@@ -331,8 +340,12 @@ async fn refresh_token_inner(
     });
     const JWT_SECRET_ENV: &str = "JWT_SECRET";
     let secret = std::env::var(JWT_SECRET_ENV).unwrap_or_else(|_| "dev_secret".to_string());
-    let access_token = encode(&Header::default(), &claims, &EncodingKey::from_secret(secret.as_bytes()))
-        .map_err(|_| AppError::Internal)?;
+    let access_token = encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .map_err(|_| AppError::Internal)?;
 
     // 3. Issue new refresh token and update session
     let mut refresh_bytes = [0u8; 32];
@@ -344,14 +357,12 @@ async fn refresh_token_inner(
 
     // Revoke old session and insert new
     let mut tx = state.db.begin().await.map_err(|_| AppError::Internal)?;
-    sqlx::query(
-        "UPDATE user_sessions SET status = 'revoked', revoked_at = $1 WHERE id = $2"
-    )
-    .bind(&now)
-    .bind(&session_id)
-    .execute(&mut *tx)
-    .await
-    .map_err(|_| AppError::Internal)?;
+    sqlx::query("UPDATE user_sessions SET status = 'revoked', revoked_at = $1 WHERE id = $2")
+        .bind(&now)
+        .bind(&session_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| AppError::Internal)?;
     sqlx::query(
         "INSERT INTO user_sessions (id, user_id, environment_id, refresh_token, jwt_id, status, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, 'active', $6, $7)"
     )
@@ -448,9 +459,8 @@ async fn revoke_token_inner(
     .fetch_optional(&state.db)
     .await
     .map_err(|_| AppError::Internal)?;
-    let row = row.ok_or_else(|| {
-        AppError::BadRequest("Token not found or already revoked".to_string())
-    })?;
+    let row =
+        row.ok_or_else(|| AppError::BadRequest("Token not found or already revoked".to_string()))?;
     let user_id: Uuid = row.get("user_id");
     let business_id: Uuid = row.get("business_id");
 

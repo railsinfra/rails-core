@@ -54,7 +54,6 @@ pub struct CreateAccountRequest {
     /// Required when creating account for a platform user (legacy). Omit when using holder metadata (email, first_name, last_name).
     #[serde(default)]
     pub user_id: Option<Uuid>,
-    #[serde(default = "default_currency")]
     pub currency: String,
     #[serde(default)]
     pub admin_user_id: Option<Uuid>,  // Required for customer accounts (holder-based or legacy)
@@ -65,10 +64,6 @@ pub struct CreateAccountRequest {
     pub first_name: Option<String>,
     #[serde(default)]
     pub last_name: Option<String>,
-}
-
-fn default_currency() -> String {
-    "USD".to_string()
 }
 
 fn default_environment() -> Option<String> {

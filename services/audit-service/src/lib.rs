@@ -6,4 +6,5 @@ pub mod db;
 pub mod grpc_server;
 pub mod proto;
 pub mod routes;
+pub mod users_grpc;
 pub mod validate;
