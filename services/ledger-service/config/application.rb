@@ -44,5 +44,7 @@ module Ledger
     # Middleware like session, flash, cookies can be added back manually.
     # Skip views, helpers and assets when generating a new resource.
     config.api_only = true
+
+    config.x.default_currency = ENV.fetch('LEDGER_DEFAULT_CURRENCY', 'USD').upcase
   end
 end

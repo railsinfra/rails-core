@@ -6,7 +6,7 @@ use argon2::password_hash::SaltString;
 use argon2::{Argon2, PasswordHasher};
 use axum::extract::ConnectInfo;
 use axum::http::HeaderMap;
-use axum::{Json, extract::State};
+use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
@@ -77,11 +77,12 @@ async fn create_sdk_user_inner(
         &payload.password,
     )?;
 
-    let exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)")
-        .bind(&email)
-        .fetch_one(&state.db)
-        .await
-        .map_err(|_| AppError::Internal)?;
+    let exists =
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)")
+            .bind(&email)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|_| AppError::Internal)?;
     if exists {
         return Err(AppError::Conflict(DUPLICATE_EMAIL_MESSAGE.to_string()));
     }
@@ -229,7 +230,7 @@ pub async fn me(
     ctx: AuthContext,
 ) -> Result<Json<MeResponse>, AppError> {
     let user_id = ctx.user_id.ok_or(AppError::Forbidden)?;
-    
+
     // First, try to find user in the requested environment
     let user_row = sqlx::query(
         "SELECT id, business_id, environment_id, first_name, last_name, email, role, status FROM users WHERE id = $1 AND environment_id = $2 AND status = 'active'"
@@ -239,7 +240,7 @@ pub async fn me(
     .fetch_optional(&state.db)
     .await
     .map_err(|_| AppError::Internal)?;
-    
+
     // If user doesn't exist in requested environment, find them in any environment for the same business
     // This allows users to access both sandbox and production even if they only have a user record in one
     let user_row = if let Some(row) = user_row {
@@ -254,7 +255,7 @@ pub async fn me(
         .fetch_optional(&state.db)
         .await
         .map_err(|_| AppError::Internal)?;
-        
+
         // Verify that the requested environment_id belongs to the same business
         if any_user_row.is_some() {
             let env_check = sqlx::query(
@@ -265,15 +266,15 @@ pub async fn me(
             .fetch_optional(&state.db)
             .await
             .map_err(|_| AppError::Internal)?;
-            
+
             if env_check.is_none() {
                 return Err(AppError::Forbidden);
             }
         }
-        
+
         any_user_row
     };
-    
+
     let user_row = user_row.ok_or(AppError::Forbidden)?;
 
     let user = MeUser {
@@ -304,7 +305,7 @@ pub async fn me(
     };
 
     let business_row = sqlx::query(
-        "SELECT id, name, website, status FROM businesses WHERE id = $1 AND status = 'active'"
+        "SELECT id, name, website, status FROM businesses WHERE id = $1 AND status = 'active'",
     )
     .bind(&user.business_id)
     .fetch_optional(&state.db)
@@ -341,11 +342,13 @@ mod tests {
     #[test]
     fn duplicate_email_message_is_user_friendly_and_stable() {
         assert!(
-            DUPLICATE_EMAIL_MESSAGE.contains("account") && DUPLICATE_EMAIL_MESSAGE.contains("email"),
+            DUPLICATE_EMAIL_MESSAGE.contains("account")
+                && DUPLICATE_EMAIL_MESSAGE.contains("email"),
             "Message should be non-technical and actionable"
         );
         assert!(
-            DUPLICATE_EMAIL_MESSAGE.contains("signing in") || DUPLICATE_EMAIL_MESSAGE.contains("reset"),
+            DUPLICATE_EMAIL_MESSAGE.contains("signing in")
+                || DUPLICATE_EMAIL_MESSAGE.contains("reset"),
             "Message should suggest sign in or password reset"
         );
     }

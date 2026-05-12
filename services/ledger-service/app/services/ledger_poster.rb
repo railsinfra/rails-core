@@ -40,7 +40,7 @@ class LedgerPoster
     @source_external_account_id = source_external_account_id
     @destination_external_account_id = destination_external_account_id
     @amount = amount
-    @currency = currency
+    @currency = currency.to_s.strip.upcase
     @external_transaction_id = external_transaction_id
     @idempotency_key = idempotency_key
     @correlation_id = correlation_id
@@ -113,7 +113,8 @@ class LedgerPoster
   def validate_inputs!
     raise PostingError, "Amount must be positive" unless @amount > 0
     raise PostingError, "Invalid environment" unless %w[sandbox production].include?(@environment)
-    raise PostingError, "Currency must match" unless @currency.present?
+    raise PostingError, "Currency is required" if @currency.blank?
+    raise PostingError, "Currency must be a 3-letter ISO code" unless @currency.match?(/\A[A-Z]{3}\z/)
   end
 
   def existing_result(transaction)

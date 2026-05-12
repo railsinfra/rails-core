@@ -42,9 +42,7 @@ fn normalize_payload(payload: BetaApplicationRequest) -> Result<BetaApplicationI
     let use_case = payload.use_case.trim();
 
     if name.is_empty() || email.is_empty() || company.is_empty() || use_case.is_empty() {
-        return Err(AppError::BadRequest(
-            "All fields are required.".to_string(),
-        ));
+        return Err(AppError::BadRequest("All fields are required.".to_string()));
     }
 
     Ok(BetaApplicationInput {
@@ -67,7 +65,7 @@ async fn apply_for_beta_inner(
 
     // Application-level duplicate check (defense in depth with DB constraint)
     let exists = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM beta_applications WHERE LOWER(TRIM(email)) = $1)"
+        "SELECT EXISTS(SELECT 1 FROM beta_applications WHERE LOWER(TRIM(email)) = $1)",
     )
     .bind(&email_normalized)
     .fetch_one(&state.db)
@@ -102,7 +100,12 @@ async fn apply_for_beta_inner(
 
     if let Some(email_service) = &state.email {
         if let Err(error) = email_service
-            .send_beta_application(&input.name, &email_normalized, &input.company, &input.use_case)
+            .send_beta_application(
+                &input.name,
+                &email_normalized,
+                &input.company,
+                &input.use_case,
+            )
             .await
         {
             tracing::error!("Failed to send beta application email: {}", error);
@@ -295,13 +298,12 @@ mod tests {
             "Application received. We'll be in touch shortly."
         );
 
-        let count: i64 = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM beta_applications WHERE email = $1"
-        )
-        .bind(&applicant_email)
-        .fetch_one(&pool)
-        .await
-        .expect("Failed to query beta applications");
+        let count: i64 =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM beta_applications WHERE email = $1")
+                .bind(&applicant_email)
+                .fetch_one(&pool)
+                .await
+                .expect("Failed to query beta applications");
 
         assert_eq!(count, 1);
         resend_mock.assert_async().await;
@@ -357,13 +359,12 @@ mod tests {
             "Application received. We'll be in touch shortly."
         );
 
-        let count: i64 = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM beta_applications WHERE email = $1"
-        )
-        .bind(&applicant_email)
-        .fetch_one(&pool)
-        .await
-        .expect("Failed to query beta applications");
+        let count: i64 =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM beta_applications WHERE email = $1")
+                .bind(&applicant_email)
+                .fetch_one(&pool)
+                .await
+                .expect("Failed to query beta applications");
 
         assert_eq!(count, 1);
     }
