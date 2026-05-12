@@ -113,7 +113,7 @@ class LedgerPoster
   def validate_inputs!
     raise PostingError, "Amount must be positive" unless @amount > 0
     raise PostingError, "Invalid environment" unless %w[sandbox production].include?(@environment)
-    raise PostingError, "Currency is required" unless @currency.present?
+    raise PostingError, "Currency is required" if @currency.blank?
     raise PostingError, "Currency must be a 3-letter ISO code" unless @currency.match?(/\A[A-Z]{3}\z/)
   end
 

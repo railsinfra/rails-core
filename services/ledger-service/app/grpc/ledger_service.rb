@@ -16,7 +16,8 @@ class LedgerService < Rails::Ledger::V1::LedgerService::Service
     source_external_account_id = raw_source.to_s
     destination_external_account_id = raw_dest.to_s
     amount = request.amount
-    currency = normalize_currency(request.currency.to_s)
+    raw_currency = request.currency.to_s
+    currency = raw_currency.strip.empty? ? '' : normalize_currency(raw_currency)
     external_transaction_id = request.external_transaction_id.to_s
     idempotency_key = request.idempotency_key.to_s
     correlation_id = request.correlation_id.to_s
