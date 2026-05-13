@@ -45,6 +45,7 @@ def request_json(
             body = {"_raw": text}
         raise RuntimeError(f"HTTP {e.code} {method} {url}: {body}") from e
 
+
 def generate_suffix_and_emails() -> tuple[str, str, str]:
     suffix = uuid.uuid4().hex[:12]
     return (
