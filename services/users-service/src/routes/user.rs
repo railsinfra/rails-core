@@ -8,9 +8,11 @@ use axum::extract::ConnectInfo;
 use axum::http::HeaderMap;
 use axum::{extract::State, Json};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sqlx::Row;
 use uuid::Uuid;
 
+use crate::analytics::spawn_capture_event;
 use crate::audit_emit;
 use crate::auth::{ApiKeyOnlyContext, AuthContext};
 use crate::error::{AppError, DUPLICATE_EMAIL_MESSAGE};
@@ -49,6 +51,16 @@ pub(crate) fn validate_sdk_user_payload(
         )));
     }
     Ok((email, first_name, last_name))
+}
+
+fn sdk_user_failure_event(error: &AppError) -> &'static str {
+    match error {
+        AppError::Conflict(_) => "sdk_user_creation_duplicate_rejected",
+        AppError::BadRequest(_) | AppError::Unauthorized | AppError::Forbidden => {
+            "sdk_user_creation_validation_failed"
+        }
+        _ => "sdk_user_creation_failed",
+    }
 }
 
 #[derive(Deserialize)]
@@ -136,11 +148,28 @@ pub async fn create_sdk_user(
     const ACTION: &str = "users.sdk.user.create";
     let business_id = ctx.business_id;
     let api_key_id = ctx.api_key_id;
+    let analytics_distinct_id = normalize_email(&payload.email);
+    spawn_capture_event(
+        "sdk_user_creation_attempted",
+        analytics_distinct_id.clone(),
+        json!({
+            "business_id": business_id.to_string(),
+            "api_key_id": api_key_id.to_string(),
+        }),
+    );
     let out = create_sdk_user_inner(state.clone(), ctx, Json(payload)).await;
     let mut meta = HashMap::new();
     meta.insert("api_key_id".to_string(), api_key_id.to_string());
     match &out {
         Ok(body) => {
+            spawn_capture_event(
+                "sdk_user_created",
+                body.user_id.to_string(),
+                json!({
+                    "business_id": business_id.to_string(),
+                    "api_key_id": api_key_id.to_string(),
+                }),
+            );
             audit_emit::emit_users_mutation(
                 &state.grpc,
                 &headers,
@@ -161,6 +190,17 @@ pub async fn create_sdk_user(
             .await;
         }
         Err(e) => {
+            let event = sdk_user_failure_event(e);
+            spawn_capture_event(
+                event,
+                analytics_distinct_id,
+                json!({
+                    "business_id": business_id.to_string(),
+                    "api_key_id": api_key_id.to_string(),
+                    "status": e.status_code(),
+                    "message": e.to_string(),
+                }),
+            );
             meta.insert(
                 "http_status".into(),
                 audit_emit::http_status_for_error(e).to_string(),
@@ -331,7 +371,7 @@ pub async fn me(
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_email, validate_sdk_user_payload};
+    use super::{normalize_email, sdk_user_failure_event, validate_sdk_user_payload};
     use crate::error::{AppError, DUPLICATE_EMAIL_MESSAGE};
 
     #[test]
@@ -384,5 +424,29 @@ mod tests {
         assert_eq!(em, "user@ex.com");
         assert_eq!(f, "Pat");
         assert_eq!(l, "Lee");
+    }
+
+    #[test]
+    fn sdk_user_failure_event_mapping() {
+        assert_eq!(
+            sdk_user_failure_event(&AppError::Conflict("duplicate".into())),
+            "sdk_user_creation_duplicate_rejected"
+        );
+        assert_eq!(
+            sdk_user_failure_event(&AppError::BadRequest("bad".into())),
+            "sdk_user_creation_validation_failed"
+        );
+        assert_eq!(
+            sdk_user_failure_event(&AppError::Unauthorized),
+            "sdk_user_creation_validation_failed"
+        );
+        assert_eq!(
+            sdk_user_failure_event(&AppError::Forbidden),
+            "sdk_user_creation_validation_failed"
+        );
+        assert_eq!(
+            sdk_user_failure_event(&AppError::Internal),
+            "sdk_user_creation_failed"
+        );
     }
 }

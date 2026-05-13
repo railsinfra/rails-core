@@ -1,5 +1,7 @@
 use crate::errors::AppError;
-use crate::models::{Account, AccountStatus, AccountType, PaginatedAccountsResponse, PaginationMeta, AccountResponse};
+use crate::models::{
+    Account, AccountResponse, AccountStatus, AccountType, PaginatedAccountsResponse, PaginationMeta,
+};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
@@ -39,44 +41,11 @@ impl AccountRepository {
         Ok(Self::row_to_account(&row)?)
     }
 
-    pub async fn create_with_hierarchy(
-        executor: impl sqlx::Executor<'_, Database = sqlx::Postgres>,
-        account_number: &str,
-        account_type: AccountType,
-        organization_id: Option<Uuid>,
+    pub async fn find_by_id(
+        pool: &PgPool,
+        id: Uuid,
         environment: &str,
-        user_id: Uuid,
-        admin_user_id: Option<Uuid>,
-        user_role: Option<String>,
-        currency: &str,
-    ) -> Result<Account, sqlx::Error> {
-        let account_type_str: &str = match account_type {
-            AccountType::Checking => "checking",
-            AccountType::Saving => "saving",
-        };
-
-        let row = sqlx::query(
-            r#"
-            INSERT INTO accounts (account_number, account_type, organization_id, environment, user_id, admin_user_id, user_role, currency)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            RETURNING id, account_number, account_type, organization_id, environment, holder_id, user_id, admin_user_id, user_role, currency, status, created_at, updated_at
-            "#,
-        )
-        .bind(account_number)
-        .bind(account_type_str)
-        .bind(organization_id)
-        .bind(environment)
-        .bind(user_id)
-        .bind(admin_user_id)
-        .bind(user_role)
-        .bind(currency)
-        .fetch_one(executor)
-        .await?;
-
-        Ok(Self::row_to_account(&row).map_err(|e| sqlx::Error::Protocol(e.to_string().into()))?)
-    }
-
-    pub async fn find_by_id(pool: &PgPool, id: Uuid, environment: &str) -> Result<Account, AppError> {
+    ) -> Result<Account, AppError> {
         let row = sqlx::query(
             r#"
             SELECT id, account_number, account_type, organization_id, environment, holder_id, user_id, admin_user_id, user_role, currency, status, created_at, updated_at
@@ -93,7 +62,11 @@ impl AccountRepository {
         Ok(Self::row_to_account(&row)?)
     }
 
-    pub async fn find_by_user_id(pool: &PgPool, user_id: Uuid, environment: &str) -> Result<Vec<Account>, AppError> {
+    pub async fn find_by_user_id(
+        pool: &PgPool,
+        user_id: Uuid,
+        environment: &str,
+    ) -> Result<Vec<Account>, AppError> {
         let rows = sqlx::query(
             r#"
             SELECT id, account_number, account_type, organization_id, environment, holder_id, user_id, admin_user_id, user_role, currency, status, created_at, updated_at
@@ -115,7 +88,11 @@ impl AccountRepository {
         Ok(accounts)
     }
 
-    pub async fn find_by_organization_id(pool: &PgPool, organization_id: Uuid, environment: &str) -> Result<Vec<Account>, AppError> {
+    pub async fn find_by_organization_id(
+        pool: &PgPool,
+        organization_id: Uuid,
+        environment: &str,
+    ) -> Result<Vec<Account>, AppError> {
         let rows = sqlx::query(
             r#"
             SELECT id, account_number, account_type, organization_id, environment, holder_id, user_id, admin_user_id, user_role, currency, status, created_at, updated_at
@@ -137,7 +114,11 @@ impl AccountRepository {
         Ok(accounts)
     }
 
-    pub async fn find_by_admin_user_id(pool: &PgPool, admin_user_id: Uuid, environment: &str) -> Result<Vec<Account>, AppError> {
+    pub async fn find_by_admin_user_id(
+        pool: &PgPool,
+        admin_user_id: Uuid,
+        environment: &str,
+    ) -> Result<Vec<Account>, AppError> {
         let rows = sqlx::query(
             r#"
             SELECT id, account_number, account_type, organization_id, environment, holder_id, user_id, admin_user_id, user_role, currency, status, created_at, updated_at
@@ -170,7 +151,7 @@ impl AccountRepository {
 
         // Get total count (filtered by environment)
         let count_row = sqlx::query(
-            "SELECT COUNT(*) as count FROM accounts WHERE user_id = $1 AND environment = $2"
+            "SELECT COUNT(*) as count FROM accounts WHERE user_id = $1 AND environment = $2",
         )
         .bind(user_id)
         .bind(environment)
@@ -278,7 +259,7 @@ impl AccountRepository {
 
         // Get total count (filtered by environment)
         let count_row = sqlx::query(
-            "SELECT COUNT(*) as count FROM accounts WHERE admin_user_id = $1 AND environment = $2"
+            "SELECT COUNT(*) as count FROM accounts WHERE admin_user_id = $1 AND environment = $2",
         )
         .bind(admin_user_id)
         .bind(environment)
@@ -350,46 +331,10 @@ impl AccountRepository {
         Ok(Self::row_to_account(&row)?)
     }
 
-    /// Create account for a holder (SDK flow). No user_id.
-    pub async fn create_with_holder(
+    /// Count accounts by user and account_type (for enforcing max 1 checking, 1 saving per user).
+    pub async fn count_by_user_and_type(
         pool: &PgPool,
-        account_number: &str,
-        account_type: AccountType,
-        organization_id: Uuid,
-        environment: &str,
-        holder_id: Uuid,
-        admin_user_id: Option<Uuid>,
-        currency: &str,
-    ) -> Result<Account, AppError> {
-        let account_type_str: &str = match account_type {
-            AccountType::Checking => "checking",
-            AccountType::Saving => "saving",
-        };
-
-        let row = sqlx::query(
-            r#"
-            INSERT INTO accounts (account_number, account_type, organization_id, environment, holder_id, admin_user_id, user_role, currency)
-            VALUES ($1, $2, $3, $4, $5, $6, 'CUSTOMER', $7)
-            RETURNING id, account_number, account_type, organization_id, environment, holder_id, user_id, admin_user_id, user_role, currency, status, created_at, updated_at
-            "#,
-        )
-        .bind(account_number)
-        .bind(account_type_str)
-        .bind(organization_id)
-        .bind(environment)
-        .bind(holder_id)
-        .bind(admin_user_id)
-        .bind(currency)
-        .fetch_one(pool)
-        .await?;
-
-        Ok(Self::row_to_account(&row)?)
-    }
-
-    /// Count accounts by holder and account_type (for enforcing max 1 checking, 1 saving per holder).
-    pub async fn count_by_holder_and_type(
-        pool: &PgPool,
-        holder_id: Uuid,
+        user_id: Uuid,
         account_type: AccountType,
         environment: &str,
     ) -> Result<i64, AppError> {
@@ -398,9 +343,9 @@ impl AccountRepository {
             AccountType::Saving => "saving",
         };
         let row = sqlx::query(
-            "SELECT COUNT(*) as count FROM accounts WHERE holder_id = $1 AND account_type = $2 AND environment = $3",
+            "SELECT COUNT(*) as count FROM accounts WHERE user_id = $1 AND account_type = $2 AND environment = $3",
         )
-        .bind(holder_id)
+        .bind(user_id)
         .bind(account_type_str)
         .bind(environment)
         .fetch_one(pool)

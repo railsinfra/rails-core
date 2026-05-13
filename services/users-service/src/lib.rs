@@ -1,6 +1,7 @@
 //! Users microservice: HTTP API, gRPC server, and shared modules.
 //! The binary entry point delegates to [`bootstrap::run`].
 
+pub mod analytics;
 pub mod audit_emit;
 pub mod auth;
 pub mod bootstrap;

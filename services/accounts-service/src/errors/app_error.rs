@@ -3,8 +3,10 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use chrono::Utc;
 use serde_json::json;
 use thiserror::Error;
+use uuid::Uuid;
 
 #[derive(Error, Debug)]
 pub enum AppError {
@@ -44,8 +46,11 @@ impl AppError {
         match self {
             AppError::Database(_) => 500,
             AppError::NotFound(_) => 404,
-            AppError::Validation(_) | AppError::BusinessLogic(_) | AppError::AccountNotActive
-            | AppError::InsufficientFunds | AppError::InvalidAccountType => 400,
+            AppError::Validation(_)
+            | AppError::BusinessLogic(_)
+            | AppError::AccountNotActive
+            | AppError::InsufficientFunds
+            | AppError::InvalidAccountType => 400,
             AppError::TooManyRequests => 429,
             AppError::Unauthorized(_) => 401,
             AppError::Internal(_) => 500,
@@ -79,8 +84,10 @@ impl IntoResponse for AppError {
         };
 
         let body = Json(json!({
-            "error": error_message,
-            "status": status.as_u16()
+            "status": status.as_u16(),
+            "message": error_message,
+            "correlationId": Uuid::new_v4().to_string(),
+            "timestamp": Utc::now().to_rfc3339(),
         }));
 
         (status, body).into_response()

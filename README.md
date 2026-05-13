@@ -118,7 +118,18 @@ KEY_JSON=$(curl -sS -X POST "$BASE/users/api/v1/api-keys" \
 echo "$KEY_JSON" | jq .
 export API_KEY=$(echo "$KEY_JSON" | jq -r .key)
 
-# 3) Create two checking accounts (different holder emails, same org via API key)
+# 3) Create two SDK users, then create one checking account for each existing user
+curl -sS -X POST "$BASE/users/api/v1/users" \
+  -H "X-API-Key: $API_KEY" \
+  -H "X-Environment: sandbox" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"holder-a@example.com","first_name":"A","last_name":"One","password":"SecurePass123!"}' | jq .
+curl -sS -X POST "$BASE/users/api/v1/users" \
+  -H "X-API-Key: $API_KEY" \
+  -H "X-Environment: sandbox" \
+  -H "Content-Type: application/json" \
+  -d '{"email":"holder-b@example.com","first_name":"B","last_name":"Two","password":"SecurePass123!"}' | jq .
+
 A=$(curl -sS -X POST "$BASE/accounts/api/v1/accounts" \
   -H "X-API-Key: $API_KEY" \
   -H "X-Environment: sandbox" \
