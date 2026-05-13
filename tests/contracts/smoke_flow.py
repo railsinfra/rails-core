@@ -45,16 +45,15 @@ def request_json(
             body = {"_raw": text}
         raise RuntimeError(f"HTTP {e.code} {method} {url}: {body}") from e
 
-
-def main() -> int:
-    base = gateway_base()
+def generate_suffix_and_emails() -> tuple[str, str, str]:
     suffix = uuid.uuid4().hex[:12]
-    admin_email = f"contract-{suffix}@example.com"
-    holder_email = f"holder-{suffix}@example.com"
+    return (
+        suffix,
+        f"contract-{suffix}@example.com",
+        f"holder-{suffix}@example.com",
+    )
 
-    print(f"Using gateway {base}")
-
-    # 1) Register business (creates org + admin user + JWT)
+def register_business(base: str, admin_email: str, suffix: str) -> dict:
     reg_url = f"{base}/users/api/v1/business/register"
     _, reg = request_json(
         "POST",
@@ -68,6 +67,15 @@ def main() -> int:
             "admin_password": "SecurePass123!",
         },
     )
+    return reg
+
+def main() -> int:
+    base = gateway_base()
+    suffix, admin_email, holder_email = generate_suffix_and_emails()
+
+    print(f"Using gateway {base}")
+
+    reg = register_business(base, admin_email, suffix)
     access = reg["access_token"]
     env_id = str(reg["selected_environment_id"])
     business_id = str(reg["business_id"])
