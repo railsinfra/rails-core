@@ -94,7 +94,28 @@ def main() -> int:
         return 1
     print("OK  users api key created")
 
-    # 3) Account (holder path — ties to org via API key)
+    # 3) SDK user, then account for that existing user
+    user_url = f"{base}/users/api/v1/users"
+    _, user_body = request_json(
+        "POST",
+        user_url,
+        headers={
+            "X-API-Key": api_key,
+            "X-Environment": "sandbox",
+        },
+        json_body={
+            "email": holder_email,
+            "first_name": "H",
+            "last_name": "older",
+            "password": f"Passw0rd-{suffix}!",
+        },
+    )
+    expected_user_id = str(user_body.get("user_id") or "")
+    if not expected_user_id:
+        print("FAIL sdk user response missing user_id", file=sys.stderr)
+        return 1
+    print(f"OK  users sdk user created user_id={expected_user_id}")
+
     acc_url = f"{base}/accounts/api/v1/accounts"
     _, account = request_json(
         "POST",
@@ -120,8 +141,11 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    if holder_id is None and user_id is None:
-        print("FAIL account: expected holder_id or user_id", file=sys.stderr)
+    if holder_id is not None or user_id != expected_user_id:
+        print(
+            f"FAIL account: expected user_id={expected_user_id!r} and holder_id=None, got holder_id={holder_id!r} user_id={user_id!r}",
+            file=sys.stderr,
+        )
         return 1
     print(f"OK  accounts create account_id={account_id} holder_id={holder_id} user_id={user_id}")
 

@@ -1,5 +1,10 @@
+use axum::{
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
+use chrono::Utc;
 use thiserror::Error;
-use axum::{http::StatusCode, response::{IntoResponse, Response}};
+use uuid::Uuid;
 
 /// User-facing message when duplicate email registration is attempted.
 pub const DUPLICATE_EMAIL_MESSAGE: &str =
@@ -11,9 +16,9 @@ pub const DUPLICATE_BETA_EMAIL_MESSAGE: &str =
 
 #[derive(Error, Debug)]
 pub enum AppError {
-    #[error("Unauthorized")] 
+    #[error("Unauthorized")]
     Unauthorized,
-    #[error("Forbidden")] 
+    #[error("Forbidden")]
     Forbidden,
     #[error("Request rejected: API called from an unrecognized source.")]
     UnrecognizedSource,
@@ -43,29 +48,27 @@ impl AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, code, details, should_report) = match &self {
-            AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized", None, false),
-            AppError::Forbidden => (StatusCode::FORBIDDEN, "forbidden", None, false),
-            AppError::UnrecognizedSource => (StatusCode::FORBIDDEN, "unrecognized_source", None, true), // Security issue
-            AppError::TooManyRequests => (StatusCode::TOO_MANY_REQUESTS, "rate_limited", None, false),
-            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, "bad_request", Some(msg.clone()), false),
-            AppError::Conflict(msg) => (StatusCode::CONFLICT, "conflict", Some(msg.clone()), false),
-            AppError::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "internal", None, true), // Always report internal errors
+        let (status, should_report) = match &self {
+            AppError::Unauthorized => (StatusCode::UNAUTHORIZED, false),
+            AppError::Forbidden => (StatusCode::FORBIDDEN, false),
+            AppError::UnrecognizedSource => (StatusCode::FORBIDDEN, true), // Security issue
+            AppError::TooManyRequests => (StatusCode::TOO_MANY_REQUESTS, false),
+            AppError::BadRequest(_) => (StatusCode::BAD_REQUEST, false),
+            AppError::Conflict(_) => (StatusCode::CONFLICT, false),
+            AppError::Internal => (StatusCode::INTERNAL_SERVER_ERROR, true), // Always report internal errors
         };
-        
+
         // Report critical errors to Sentry
         if should_report {
             sentry::capture_message(&self.to_string(), sentry::Level::Error);
         }
-        
-        // Return explicit technical error messages - transformation happens in client-server
-        let mut body = serde_json::json!({
-            "error": self.to_string(),
-            "code": code
+
+        let body = serde_json::json!({
+            "status": status.as_u16(),
+            "message": self.to_string(),
+            "correlationId": Uuid::new_v4().to_string(),
+            "timestamp": Utc::now().to_rfc3339(),
         });
-        if let Some(details) = details {
-            body["details"] = serde_json::Value::String(details);
-        }
         (status, axum::Json(body)).into_response()
     }
 }
@@ -82,10 +85,7 @@ mod tests {
         assert_eq!(AppError::Forbidden.status_code(), 403);
         assert_eq!(AppError::UnrecognizedSource.status_code(), 403);
         assert_eq!(AppError::TooManyRequests.status_code(), 429);
-        assert_eq!(
-            AppError::BadRequest("bad".into()).status_code(),
-            400
-        );
+        assert_eq!(AppError::BadRequest("bad".into()).status_code(), 400);
         assert_eq!(AppError::Conflict("dup".into()).status_code(), 409);
         assert_eq!(AppError::Internal.status_code(), 500);
     }
@@ -97,10 +97,7 @@ mod tests {
             (AppError::Forbidden, StatusCode::FORBIDDEN),
             (AppError::UnrecognizedSource, StatusCode::FORBIDDEN),
             (AppError::TooManyRequests, StatusCode::TOO_MANY_REQUESTS),
-            (
-                AppError::BadRequest("x".into()),
-                StatusCode::BAD_REQUEST,
-            ),
+            (AppError::BadRequest("x".into()), StatusCode::BAD_REQUEST),
             (AppError::Conflict("dup".into()), StatusCode::CONFLICT),
             (AppError::Internal, StatusCode::INTERNAL_SERVER_ERROR),
         ];

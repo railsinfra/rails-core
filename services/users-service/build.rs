@@ -13,6 +13,9 @@ fn audit_proto_paths(manifest_dir: &Path) -> (PathBuf, PathBuf) {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest_dir = PathBuf::from(std::env::var(CARGO_MANIFEST_DIR_ENV)?);
+    println!("cargo:rerun-if-changed=proto/users.proto");
+    println!("cargo:rerun-if-changed=proto/accounts.proto");
+    println!("cargo:rerun-if-changed=proto/audit/v1/audit.proto");
     tonic_build::configure()
         .build_client(true)
         .compile_protos(&["proto/accounts.proto"], &["proto"])?;

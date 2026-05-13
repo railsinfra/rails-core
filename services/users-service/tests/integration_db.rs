@@ -24,7 +24,9 @@ use users_service::grpc::audit_proto::audit_service_server::{AuditService, Audit
 use users_service::grpc::audit_proto::{AppendAuditEventRequest, AppendAuditEventResponse};
 use users_service::grpc::GrpcClients;
 use users_service::grpc_server::proto::users_service_server::UsersService;
-use users_service::grpc_server::proto::ValidateApiKeyRequest;
+use users_service::grpc_server::proto::{
+    ResolveAccountUserForApiKeyRequest, ValidateApiKeyRequest,
+};
 use users_service::grpc_server::UsersGrpcService;
 use users_service::routes::apikey::{
     create_api_key, list_api_keys, revoke_api_key, CreateApiKeyRequest,
@@ -33,7 +35,9 @@ use users_service::routes::auth::{
     login, refresh_token, revoke_token, LoginRequest, RefreshTokenRequest, RevokeTokenRequest,
 };
 use users_service::routes::beta::{apply_for_beta, BetaApplicationRequest};
-use users_service::routes::business::{register_business, RegisterBusinessRequest, RegisterBusinessResponse};
+use users_service::routes::business::{
+    register_business, RegisterBusinessRequest, RegisterBusinessResponse,
+};
 use users_service::routes::password_reset::{
     request_password_reset, reset_password, RequestPasswordResetRequest, ResetPasswordRequest,
 };
@@ -76,7 +80,9 @@ impl AuditService for FailingAuditGrpc {
         &self,
         _request: tonic::Request<AppendAuditEventRequest>,
     ) -> Result<tonic::Response<AppendAuditEventResponse>, tonic::Status> {
-        Err(tonic::Status::unavailable("audit unavailable for coverage test"))
+        Err(tonic::Status::unavailable(
+            "audit unavailable for coverage test",
+        ))
     }
 }
 
@@ -108,12 +114,7 @@ fn hdr_empty() -> HeaderMap {
 }
 
 fn empty_request_parts() -> axum::http::request::Parts {
-    Request::builder()
-        .uri("/")
-        .body(())
-        .unwrap()
-        .into_parts()
-        .0
+    Request::builder().uri("/").body(()).unwrap().into_parts().0
 }
 
 fn unique_test_password() -> String {
@@ -302,6 +303,22 @@ async fn register_login_me_refresh_revoke_api_keys_and_grpc_validate() {
         .expect("api key only context");
     assert_eq!(api_ctx.environment_id, sandbox_id);
 
+    let account_user_email = format!("account-user+{}@example.com", Uuid::new_v4());
+    let account_user = create_sdk_user(
+        State(state.clone()),
+        HeaderMap::new(),
+        test_connect_info(),
+        api_ctx.clone(),
+        Json(CreateSdkUserRequest {
+            email: account_user_email.clone(),
+            first_name: "Account".into(),
+            last_name: "Owner".into(),
+            password: "password123!".into(),
+        }),
+    )
+    .await
+    .expect("create account user");
+
     let mut parts_staging = empty_request_parts();
     parts_staging
         .headers
@@ -391,6 +408,82 @@ async fn register_login_me_refresh_revoke_api_keys_and_grpc_validate() {
     let inner = validate.into_inner();
     assert!(!inner.business_id.is_empty());
 
+    let resolved = grpc
+        .resolve_account_user_for_api_key(tonic::Request::new(ResolveAccountUserForApiKeyRequest {
+            api_key: plain_key.clone(),
+            environment: "sandbox".into(),
+            email: account_user_email.to_uppercase(),
+            first_name: " Account ".into(),
+            last_name: " Owner ".into(),
+        }))
+        .await
+        .expect("resolve account user")
+        .into_inner();
+    assert_eq!(resolved.user_id, account_user.0.user_id.to_string());
+    assert_eq!(resolved.business_id, body.business_id.to_string());
+    assert_eq!(resolved.environment_id, sandbox_id.to_string());
+
+    for (email_arg, first_name, last_name) in [
+        ("missing@example.com".to_string(), "Account", "Owner"),
+        (account_user_email.clone(), "Wrong", "Owner"),
+        (account_user_email.clone(), "Account", "Wrong"),
+    ] {
+        let err = grpc
+            .resolve_account_user_for_api_key(tonic::Request::new(
+                ResolveAccountUserForApiKeyRequest {
+                    api_key: plain_key.clone(),
+                    environment: "sandbox".into(),
+                    email: email_arg,
+                    first_name: first_name.into(),
+                    last_name: last_name.into(),
+                },
+            ))
+            .await
+            .expect_err("mismatched account user should fail");
+        assert_eq!(err.code(), tonic::Code::NotFound);
+    }
+
+    let invalid_key = grpc
+        .resolve_account_user_for_api_key(tonic::Request::new(ResolveAccountUserForApiKeyRequest {
+            api_key: "not-a-real-api-key-value".into(),
+            environment: "sandbox".into(),
+            email: account_user_email.clone(),
+            first_name: "Account".into(),
+            last_name: "Owner".into(),
+        }))
+        .await
+        .expect_err("invalid api key should fail");
+    assert_eq!(invalid_key.code(), tonic::Code::Unauthenticated);
+
+    let wrong_environment = grpc
+        .resolve_account_user_for_api_key(tonic::Request::new(ResolveAccountUserForApiKeyRequest {
+            api_key: plain_key.clone(),
+            environment: "production".into(),
+            email: account_user_email.clone(),
+            first_name: "Account".into(),
+            last_name: "Owner".into(),
+        }))
+        .await
+        .expect_err("wrong environment should fail");
+    assert_eq!(wrong_environment.code(), tonic::Code::NotFound);
+
+    sqlx::query("UPDATE users SET status = 'suspended' WHERE id = $1")
+        .bind(account_user.0.user_id)
+        .execute(&pool)
+        .await
+        .expect("suspend account user");
+    let inactive = grpc
+        .resolve_account_user_for_api_key(tonic::Request::new(ResolveAccountUserForApiKeyRequest {
+            api_key: plain_key.clone(),
+            environment: "sandbox".into(),
+            email: account_user_email,
+            first_name: "Account".into(),
+            last_name: "Owner".into(),
+        }))
+        .await
+        .expect_err("inactive account user should fail");
+    assert_eq!(inactive.code(), tonic::Code::NotFound);
+
     let mut parts_bad_env = empty_request_parts();
     parts_bad_env
         .headers
@@ -462,7 +555,9 @@ async fn register_business_rejects_empty_admin_email() {
     let pool = match test_pool().await {
         Some(p) => p,
         None => {
-            eprintln!("DATABASE_URL not set; skipping register_business_rejects_empty_admin_email.");
+            eprintln!(
+                "DATABASE_URL not set; skipping register_business_rejects_empty_admin_email."
+            );
             return;
         }
     };
@@ -807,7 +902,10 @@ async fn http_router_health_and_correlation_header() {
     let mut svc = app.into_service();
 
     let peer = std::net::SocketAddr::from(([127, 0, 0, 1], 9));
-    let mut health_req = Request::builder().uri("/health").body(Body::empty()).unwrap();
+    let mut health_req = Request::builder()
+        .uri("/health")
+        .body(Body::empty())
+        .unwrap();
     health_req.extensions_mut().insert(ConnectInfo(peer));
     let health = svc.ready().await.unwrap().call(health_req).await.unwrap();
     assert_eq!(health.status(), StatusCode::OK);
@@ -816,9 +914,7 @@ async fn http_router_health_and_correlation_header() {
         .method("POST")
         .uri("/api/v1/auth/revoke")
         .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(
-            json!({ "refresh_token": "nope" }).to_string(),
-        ))
+        .body(Body::from(json!({ "refresh_token": "nope" }).to_string()))
         .unwrap();
     api_req.extensions_mut().insert(ConnectInfo(peer));
     let api = svc.ready().await.unwrap().call(api_req).await.unwrap();
@@ -928,13 +1024,12 @@ async fn password_reset_completes_with_seeded_token() {
     .expect("register");
 
     let email_norm = email.trim().to_lowercase();
-    let user_id: Uuid = sqlx::query_scalar(
-        "SELECT id FROM users WHERE email = $1 AND status = 'active' LIMIT 1",
-    )
-    .bind(&email_norm)
-    .fetch_one(&pool)
-    .await
-    .expect("user id");
+    let user_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM users WHERE email = $1 AND status = 'active' LIMIT 1")
+            .bind(&email_norm)
+            .fetch_one(&pool)
+            .await
+            .expect("user id");
 
     let raw_token = "integration-reset-token-32chars!!";
     let mut hasher = Sha256::new();
@@ -1012,10 +1107,7 @@ async fn revoke_api_key_unknown_returns_bad_request() {
     )
     .await
     .expect("register");
-    let RegisterBusinessResponse {
-        environments,
-        ..
-    } = reg.0;
+    let RegisterBusinessResponse { environments, .. } = reg.0;
     let sandbox_id = environments
         .iter()
         .find(|e| e.r#type == "sandbox")
@@ -1071,7 +1163,9 @@ async fn create_api_key_forbidden_for_non_admin_member() {
     let pool = match test_pool().await {
         Some(p) => p,
         None => {
-            eprintln!("DATABASE_URL not set; skipping create_api_key_forbidden_for_non_admin_member.");
+            eprintln!(
+                "DATABASE_URL not set; skipping create_api_key_forbidden_for_non_admin_member."
+            );
             return;
         }
     };
@@ -1140,7 +1234,9 @@ async fn create_api_key_forbidden_for_non_admin_member() {
     let mut parts = empty_request_parts();
     parts.headers.insert(
         header::AUTHORIZATION,
-        format!("Bearer {}", member_login.0.access_token).parse().unwrap(),
+        format!("Bearer {}", member_login.0.access_token)
+            .parse()
+            .unwrap(),
     );
     parts
         .headers
@@ -1454,13 +1550,12 @@ async fn login_falls_back_to_sandbox_when_requested_environment_id_unknown() {
     )
     .await
     .expect("login with bogus env id still succeeds");
-    let sandbox_type = ok
-        .0
-        .environments
-        .iter()
-        .find(|e| e.id == ok.0.selected_environment_id)
-        .map(|e| e.r#type.as_str())
-        .expect("selected env");
+    let sandbox_type =
+        ok.0.environments
+            .iter()
+            .find(|e| e.id == ok.0.selected_environment_id)
+            .map(|e| e.r#type.as_str())
+            .expect("selected env");
     assert_eq!(sandbox_type, "sandbox");
 
     std::env::remove_var(JWT_SECRET_ENV);
@@ -1474,7 +1569,9 @@ async fn jwt_auth_rejects_environment_not_in_business() {
     let pool = match test_pool().await {
         Some(p) => p,
         None => {
-            eprintln!("DATABASE_URL not set; skipping jwt_auth_rejects_environment_not_in_business.");
+            eprintln!(
+                "DATABASE_URL not set; skipping jwt_auth_rejects_environment_not_in_business."
+            );
             return;
         }
     };
@@ -1518,18 +1615,23 @@ async fn jwt_auth_rejects_environment_not_in_business() {
     let mut parts = empty_request_parts();
     parts.headers.insert(
         header::AUTHORIZATION,
-        format!("Bearer {}", login_ok.0.access_token).parse().unwrap(),
+        format!("Bearer {}", login_ok.0.access_token)
+            .parse()
+            .unwrap(),
     );
-    parts
-        .headers
-        .insert("x-environment-id", Uuid::new_v4().to_string().parse().unwrap());
+    parts.headers.insert(
+        "x-environment-id",
+        Uuid::new_v4().to_string().parse().unwrap(),
+    );
     let err = AuthContext::from_request_parts(&mut parts, &state).await;
     assert!(matches!(err, Err(AppError::Forbidden)));
 
     let mut parts_ok = empty_request_parts();
     parts_ok.headers.insert(
         header::AUTHORIZATION,
-        format!("Bearer {}", login_ok.0.access_token).parse().unwrap(),
+        format!("Bearer {}", login_ok.0.access_token)
+            .parse()
+            .unwrap(),
     );
     parts_ok
         .headers
@@ -1635,7 +1737,9 @@ async fn reset_password_success_with_failing_audit_grpc() {
     let pool = match test_pool().await {
         Some(p) => p,
         None => {
-            eprintln!("DATABASE_URL not set; skipping reset_password_success_with_failing_audit_grpc.");
+            eprintln!(
+                "DATABASE_URL not set; skipping reset_password_success_with_failing_audit_grpc."
+            );
             return;
         }
     };
@@ -1659,13 +1763,12 @@ async fn reset_password_success_with_failing_audit_grpc() {
     .expect("register");
 
     let email_norm = email.trim().to_lowercase();
-    let user_id: Uuid = sqlx::query_scalar(
-        "SELECT id FROM users WHERE email = $1 AND status = 'active' LIMIT 1",
-    )
-    .bind(&email_norm)
-    .fetch_one(&pool)
-    .await
-    .expect("user id");
+    let user_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM users WHERE email = $1 AND status = 'active' LIMIT 1")
+            .bind(&email_norm)
+            .fetch_one(&pool)
+            .await
+            .expect("user id");
 
     let raw_token = "integration-reset-token-32chars!!";
     let mut hasher = Sha256::new();
