@@ -55,7 +55,7 @@ pub(crate) fn negate_ledger_balance_for_display(balance: &str) -> i64 {
     if trimmed.is_empty() {
         return 0;
     }
-    trimmed.parse::<i64>().map(|n| -n).unwrap_or(0)
+    trimmed.parse::<i64>().map_or(0, |n| -n)
 }
 
 /// Extract X-API-Key from headers. Returns None if missing or empty.
