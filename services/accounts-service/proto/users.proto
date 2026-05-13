@@ -8,6 +8,7 @@ option java_outer_classname = "UsersProto";
 
 service UsersService {
   rpc ValidateApiKey(ValidateApiKeyRequest) returns (ValidateApiKeyResponse);
+  rpc ResolveAccountUserForApiKey(ResolveAccountUserForApiKeyRequest) returns (ResolveAccountUserForApiKeyResponse);
 }
 
 message ValidateApiKeyRequest {
@@ -19,4 +20,18 @@ message ValidateApiKeyResponse {
   string business_id = 1;
   string environment_id = 2;
   string admin_user_id = 3;  // One admin user in this business/environment for account hierarchy
+}
+
+message ResolveAccountUserForApiKeyRequest {
+  string api_key = 1;
+  string environment = 2;  // "sandbox" or "production"
+  string email = 3;
+  string first_name = 4;
+  string last_name = 5;
+}
+
+message ResolveAccountUserForApiKeyResponse {
+  string business_id = 1;
+  string environment_id = 2;
+  string user_id = 3;
 }

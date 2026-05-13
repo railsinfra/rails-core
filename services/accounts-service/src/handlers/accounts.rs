@@ -4,6 +4,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Deserializer};
+use serde_json::json;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::Instant;
@@ -11,13 +12,13 @@ use tonic::transport::Channel;
 use tracing::Level;
 use uuid::Uuid;
 
+use crate::analytics::spawn_capture_event;
 use crate::errors::AppError;
 use crate::grpc::audit_proto::audit_service_client::AuditServiceClient;
 use crate::grpc::audit_proto::ActorType;
 use crate::models::{
     Account, AccountResponse, AccountTransactionResponse, CreateAccountRequest,
-    PaginatedAccountsResponse, UpdateAccountRequest,
-    TransactionStatus,
+    PaginatedAccountsResponse, TransactionStatus, UpdateAccountRequest,
 };
 use crate::routes::api::AppState;
 use crate::services::AccountService;
@@ -54,7 +55,7 @@ pub(crate) fn negate_ledger_balance_for_display(balance: &str) -> i64 {
     if trimmed.is_empty() {
         return 0;
     }
-    trimmed.parse::<i64>().map(|n| -n).unwrap_or(0)
+    trimmed.parse::<i64>().map_or(0, |n| -n)
 }
 
 /// Extract X-API-Key from headers. Returns None if missing or empty.
@@ -64,6 +65,14 @@ pub(crate) fn extract_api_key(headers: &HeaderMap) -> Option<String> {
         .and_then(|v| v.to_str().ok())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+fn account_creation_failure_event(error: &AppError) -> &'static str {
+    match error {
+        AppError::BusinessLogic(_) => "account_creation_duplicate_rejected",
+        AppError::Validation(_) | AppError::Unauthorized(_) => "account_creation_validation_failed",
+        _ => "account_creation_failed",
+    }
 }
 
 fn log_money_request_boundary(
@@ -157,57 +166,93 @@ pub async fn create_account(
 ) -> Result<(StatusCode, Json<AccountResponse>), AppError> {
     let path = "/api/v1/accounts";
     let environment = extract_environment(&headers)?;
-    let mut request = request;
-    request.environment = Some(environment.clone());
+    let analytics_distinct_id = request.email.trim().to_lowercase();
+    spawn_capture_event(
+        "account_creation_attempted",
+        analytics_distinct_id.clone(),
+        json!({
+            "environment": environment.clone(),
+            "account_type": format!("{:?}", request.account_type).to_lowercase(),
+        }),
+    );
+    let api_key = extract_api_key(&headers).ok_or_else(|| {
+        spawn_capture_event(
+            "account_creation_validation_failed",
+            analytics_distinct_id.clone(),
+            json!({"reason": "missing_api_key"}),
+        );
+        AppError::Validation("X-API-Key header is required for account creation".to_string())
+    })?;
 
-    // Holder-based path: email (and optionally first_name, last_name) + X-API-Key
-    let is_holder_path = request
-        .email
-        .as_deref()
-        .map(|s| !s.trim().is_empty())
-        .unwrap_or(false);
+    if request.email.trim().is_empty() {
+        spawn_capture_event(
+            "account_creation_validation_failed",
+            analytics_distinct_id.clone(),
+            json!({"reason": "missing_email"}),
+        );
+        return Err(AppError::Validation("email is required".to_string()));
+    }
+    if request.first_name.trim().is_empty() {
+        spawn_capture_event(
+            "account_creation_validation_failed",
+            analytics_distinct_id.clone(),
+            json!({"reason": "missing_first_name"}),
+        );
+        return Err(AppError::Validation("first_name is required".to_string()));
+    }
+    if request.last_name.trim().is_empty() {
+        spawn_capture_event(
+            "account_creation_validation_failed",
+            analytics_distinct_id.clone(),
+            json!({"reason": "missing_last_name"}),
+        );
+        return Err(AppError::Validation("last_name is required".to_string()));
+    }
 
-    let org_hint_non_holder = request.organization_id;
-    let mut holder_org_on_err: Option<Uuid> = None;
+    let resolved_user = state
+        .users_grpc
+        .resolve_account_user_for_api_key(
+            &api_key,
+            &environment,
+            &request.email,
+            &request.first_name,
+            &request.last_name,
+        )
+        .await;
 
-    let account_res: Result<Account, AppError> = if is_holder_path {
-        let api_key = extract_api_key(&headers).ok_or_else(|| {
-            AppError::Validation(
-                "X-API-Key header is required for holder-based account creation".to_string(),
+    let mut org_on_err = None;
+    let account_res: Result<Account, AppError> = match resolved_user {
+        Ok(resolved_user) => {
+            org_on_err = Some(resolved_user.business_id);
+            AccountService::create_account_for_existing_user(
+                &state.pool,
+                request,
+                resolved_user.business_id,
+                &environment,
+                resolved_user.user_id,
             )
-        })?;
-        match state
-            .users_grpc
-            .validate_api_key(&api_key, &environment)
             .await
-        {
-            Ok((organization_id, _environment_id, admin_user_id)) => {
-                holder_org_on_err = Some(organization_id);
-                AccountService::create_account_with_holder(
-                    &state.pool,
-                    request,
-                    organization_id,
-                    Some(admin_user_id),
-                )
-                .await
-            }
-            Err(e) => Err(e),
         }
-    } else {
-        AccountService::create_account(&state.pool, request).await
+        Err(e) => Err(e),
     };
 
     let mut meta = HashMap::default();
     match &account_res {
         Ok(account) => {
+            spawn_capture_event(
+                "account_created",
+                account
+                    .user_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| analytics_distinct_id.clone()),
+                json!({
+                    "account_id": account.id.to_string(),
+                    "organization_id": account.organization_id.map(|id| id.to_string()),
+                    "environment": environment.clone(),
+                }),
+            );
             if let Some(org) = account.organization_id {
-                let (actor_type, actor_id) = if is_holder_path {
-                    let aid = account
-                        .admin_user_id
-                        .map(|u| u.to_string())
-                        .unwrap_or_default();
-                    (ActorType::User, aid)
-                } else if let Some(admin) = account.admin_user_id {
+                let (actor_type, actor_id) = if let Some(admin) = account.admin_user_id {
                     (ActorType::User, admin.to_string())
                 } else if let Some(uid) = account.user_id {
                     (ActorType::User, uid.to_string())
@@ -234,16 +279,20 @@ pub async fn create_account(
             }
         }
         Err(e) => {
+            let event = account_creation_failure_event(e);
+            spawn_capture_event(
+                event,
+                analytics_distinct_id.clone(),
+                json!({
+                    "status": crate::audit_emit::http_status_for_error(e),
+                    "message": e.to_string(),
+                }),
+            );
             meta.insert(
                 "http_status".into(),
                 crate::audit_emit::http_status_for_error(e).to_string(),
             );
-            let org_opt = if is_holder_path {
-                holder_org_on_err
-            } else {
-                org_hint_non_holder
-            };
-            if let Some(org) = org_opt {
+            if let Some(org) = org_on_err {
                 spawn_audit_emit(
                     state.audit_client.clone(),
                     headers.clone(),
@@ -1085,7 +1134,10 @@ mod tests {
 
     #[test]
     fn mutation_http_status_mapping() {
-        assert_eq!(mutation_http_status(TransactionStatus::Posted), StatusCode::OK);
+        assert_eq!(
+            mutation_http_status(TransactionStatus::Posted),
+            StatusCode::OK
+        );
         assert_eq!(
             mutation_http_status(TransactionStatus::Pending),
             StatusCode::ACCEPTED
@@ -1097,6 +1149,26 @@ mod tests {
         assert_eq!(
             mutation_http_status(TransactionStatus::Failed),
             StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn account_creation_failure_event_mapping() {
+        assert_eq!(
+            account_creation_failure_event(&AppError::BusinessLogic("duplicate".into())),
+            "account_creation_duplicate_rejected"
+        );
+        assert_eq!(
+            account_creation_failure_event(&AppError::Validation("bad".into())),
+            "account_creation_validation_failed"
+        );
+        assert_eq!(
+            account_creation_failure_event(&AppError::Unauthorized("bad key".into())),
+            "account_creation_validation_failed"
+        );
+        assert_eq!(
+            account_creation_failure_event(&AppError::Internal("db down".into())),
+            "account_creation_failed"
         );
     }
 }

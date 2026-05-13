@@ -1,11 +1,13 @@
 use axum::{
-    body::Body,
-    http::Request,
+    body::{to_bytes, Body},
+    http::{header, Request, StatusCode},
     middleware::{from_fn, Next},
     response::Response,
     routing::{get, post},
     Router,
 };
+use chrono::Utc;
+use serde_json::json;
 use sqlx::PgPool;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -16,8 +18,8 @@ use crate::grpc::audit_proto::audit_service_client::AuditServiceClient;
 
 use crate::handlers::{
     accounts::*,
-    transactions::{get_transaction, list_account_transactions, list_transactions},
     health::{health_check, service_root},
+    transactions::{get_transaction, list_account_transactions, list_transactions},
 };
 
 use crate::errors::AppError;
@@ -35,8 +37,7 @@ fn log_request_boundary(
 ) {
     let banner = format!(
         "-----------------------[{phase} - {} {}]----------------------------",
-        method,
-        path
+        method, path
     );
     tracing::info!(
         target = "accounts.request_boundary",
@@ -82,8 +83,16 @@ pub fn create_router(
 fn create_api_routes() -> Router<AppState> {
     let standard_routes = Router::<AppState>::new()
         .route("/accounts", post(create_account).get(list_accounts))
-        .route("/accounts/:id", get(get_account).patch(update_account_status).delete(close_account))
-        .route("/accounts/:account_id/transactions", get(list_account_transactions))
+        .route(
+            "/accounts/:id",
+            get(get_account)
+                .patch(update_account_status)
+                .delete(close_account),
+        )
+        .route(
+            "/accounts/:account_id/transactions",
+            get(list_account_transactions),
+        )
         .route("/transactions", get(list_transactions))
         .route("/transactions/:id", get(get_transaction));
 
@@ -96,10 +105,7 @@ fn create_api_routes() -> Router<AppState> {
     standard_routes.merge(money_mutations)
 }
 
-async fn correlation_id_middleware(
-    req: Request<Body>,
-    next: Next,
-) -> Result<Response, AppError> {
+async fn correlation_id_middleware(req: Request<Body>, next: Next) -> Result<Response, AppError> {
     let path = req.uri().path().to_string();
     let method = req.method().to_string();
 
@@ -133,7 +139,7 @@ async fn correlation_id_middleware(
     log_request_boundary("START", &method, &path, &correlation_id, None, None);
     tracing::info!(correlation_id = %correlation_id, %method, %path, "start");
 
-    let mut res = next.run(req).await;
+    let mut res = standardize_error_response(next.run(req).await, &correlation_id).await?;
     res.headers_mut().insert(
         "x-correlation-id",
         correlation_id
@@ -163,10 +169,52 @@ async fn correlation_id_middleware(
     Ok(res)
 }
 
+async fn standardize_error_response(
+    res: Response,
+    correlation_id: &str,
+) -> Result<Response, AppError> {
+    let status = res.status();
+    if status < StatusCode::BAD_REQUEST {
+        return Ok(res);
+    }
+
+    let (mut parts, body) = res.into_parts();
+    let bytes = to_bytes(body, 1024 * 1024)
+        .await
+        .map_err(|_| AppError::Internal("Failed to read error response body".to_string()))?;
+    let message = error_message_from_body(&bytes, status);
+    let body = json!({
+        "status": status.as_u16(),
+        "message": message,
+        "correlationId": correlation_id,
+        "timestamp": Utc::now().to_rfc3339(),
+    });
+
+    parts.headers.insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    Ok(Response::from_parts(parts, Body::from(body.to_string())))
+}
+
+fn error_message_from_body(bytes: &[u8], status: StatusCode) -> String {
+    serde_json::from_slice::<serde_json::Value>(bytes)
+        .ok()
+        .and_then(|body| {
+            body.get("message")
+                .or_else(|| body.get("error"))
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+        })
+        .filter(|message| !message.trim().is_empty())
+        .unwrap_or_else(|| status.canonical_reason().unwrap_or("error").to_string())
+}
+
 static MONEY_RATE_LIMITER: OnceLock<RateLimiter> = OnceLock::new();
 
 fn money_rate_limit_config() -> RateLimitConfig {
-    const ACCOUNTS_MONEY_RATE_LIMIT_WINDOW_SECONDS_ENV: &str = "ACCOUNTS_MONEY_RATE_LIMIT_WINDOW_SECONDS";
+    const ACCOUNTS_MONEY_RATE_LIMIT_WINDOW_SECONDS_ENV: &str =
+        "ACCOUNTS_MONEY_RATE_LIMIT_WINDOW_SECONDS";
     const ACCOUNTS_MONEY_RATE_LIMIT_MAX_ENV: &str = "ACCOUNTS_MONEY_RATE_LIMIT_MAX";
     let window_seconds = std::env::var(ACCOUNTS_MONEY_RATE_LIMIT_WINDOW_SECONDS_ENV)
         .ok()
@@ -199,8 +247,8 @@ async fn money_rate_limit_middleware(req: Request<Body>, next: Next) -> Result<R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::Request;
     use axum::extract::ConnectInfo;
+    use axum::http::Request;
     use std::net::SocketAddr;
     use std::sync::{Mutex, OnceLock};
 
@@ -237,8 +285,12 @@ mod tests {
             .header("x-forwarded-for", "203.0.113.10")
             .body(Body::empty())
             .unwrap();
-        req.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
-        assert_eq!(extract_client_key(&req, ACCOUNTS_TRUSTED_PROXY_IPS), "127.0.0.1");
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
+        assert_eq!(
+            extract_client_key(&req, ACCOUNTS_TRUSTED_PROXY_IPS),
+            "127.0.0.1"
+        );
     }
 
     #[test]
@@ -250,8 +302,12 @@ mod tests {
             .header("x-forwarded-for", "203.0.113.10, 127.0.0.1")
             .body(Body::empty())
             .unwrap();
-        req.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
-        assert_eq!(extract_client_key(&req, ACCOUNTS_TRUSTED_PROXY_IPS), "203.0.113.10");
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
+        assert_eq!(
+            extract_client_key(&req, ACCOUNTS_TRUSTED_PROXY_IPS),
+            "203.0.113.10"
+        );
     }
 
     #[test]
@@ -263,7 +319,44 @@ mod tests {
             .header("x-forwarded-for", "203.0.113.10, 198.51.100.5")
             .body(Body::empty())
             .unwrap();
-        req.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
-        assert_eq!(extract_client_key(&req, ACCOUNTS_TRUSTED_PROXY_IPS), "127.0.0.1");
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
+        assert_eq!(
+            extract_client_key(&req, ACCOUNTS_TRUSTED_PROXY_IPS),
+            "127.0.0.1"
+        );
+    }
+
+    #[test]
+    fn error_message_from_body_prefers_error_or_message_field() {
+        assert_eq!(
+            error_message_from_body(br#"{"error":"validation failed"}"#, StatusCode::BAD_REQUEST),
+            "validation failed"
+        );
+        assert_eq!(
+            error_message_from_body(br#"{"message":"not found"}"#, StatusCode::NOT_FOUND),
+            "not found"
+        );
+        assert_eq!(
+            error_message_from_body(b"not-json", StatusCode::TOO_MANY_REQUESTS),
+            "Too Many Requests"
+        );
+    }
+
+    #[tokio::test]
+    async fn standardize_error_response_returns_common_shape() {
+        let mut res = Response::new(Body::from(r#"{"error":"rate limited"}"#));
+        *res.status_mut() = StatusCode::TOO_MANY_REQUESTS;
+
+        let res = standardize_error_response(res, "cid-456").await.unwrap();
+        let status = res.status();
+        let bytes = to_bytes(res.into_body(), 1024).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(body["status"], 429);
+        assert_eq!(body["message"], "rate limited");
+        assert_eq!(body["correlationId"], "cid-456");
+        assert!(body["timestamp"].as_str().is_some());
     }
 }
