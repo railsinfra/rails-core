@@ -1,6 +1,7 @@
 //! accounts-api: HTTP + gRPC server and supporting modules.
 //! The binary entrypoint (`src/main.rs`) delegates to [`run`].
 
+pub mod analytics;
 pub mod audit_emit;
 pub mod config;
 pub mod errors;
@@ -23,14 +24,14 @@ use tracing::info;
 use tracing_subscriber::prelude::*;
 
 use config::Settings;
-use routes::create_router;
 use ledger_grpc::LedgerGrpc;
+use routes::create_router;
 
 use grpc::accounts::AccountsGrpcService;
 use grpc::proto::accounts_service_server::AccountsServiceServer;
 use sqlx::PgPool;
-use tonic::transport::Server;
 use tonic::transport::Endpoint;
+use tonic::transport::Server;
 
 pub(crate) fn resolve_migrate_run_result(
     result: Result<(), sqlx::migrate::MigrateError>,
@@ -51,7 +52,9 @@ pub(crate) fn resolve_migrate_run_result(
     }
 }
 
-pub(crate) async fn run_accounts_migrations(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) async fn run_accounts_migrations(
+    pool: &PgPool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut migrator = sqlx::migrate!("./migrations_accounts");
     migrator.set_ignore_missing(true);
     resolve_migrate_run_result(migrator.run(pool).await)?;
@@ -93,7 +96,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     if settings.sentry_dsn.is_some() {
         tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer().with_filter(tracing_subscriber::EnvFilter::new(&settings.log_level)))
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_filter(tracing_subscriber::EnvFilter::new(&settings.log_level)),
+            )
             .with(sentry_tracing::layer())
             .init();
     } else {
@@ -167,9 +173,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(addr).await?;
 
     let http_task = async move {
-        serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-            .await
-            .map_err(|e| anyhow::anyhow!("HTTP server error: {}", e))
+        serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("HTTP server error: {}", e))
     };
 
     let grpc_task = async move {

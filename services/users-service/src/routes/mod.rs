@@ -1,26 +1,31 @@
-pub mod business;
 pub mod apikey;
-pub mod user;
 pub mod auth;
+pub mod beta;
+pub mod business;
 pub mod health;
 pub mod password_reset;
-pub mod beta;
+pub mod user;
 
 mod rate_limit;
 
-use axum::{Router, routing::{post, get}};
-use axum::body::Body;
-use axum::http::Request;
+use crate::db::Db;
+use crate::email::EmailService;
+use crate::error::AppError;
+use crate::grpc::GrpcClients;
+use axum::body::{to_bytes, Body};
+use axum::http::{header, Request, StatusCode};
 use axum::middleware::{from_fn, Next};
 use axum::response::Response;
-use crate::db::Db;
-use crate::grpc::GrpcClients;
-use crate::error::AppError;
-use crate::email::EmailService;
+use axum::{
+    routing::{get, post},
+    Router,
+};
+use chrono::Utc;
 use rate_limit::{extract_client_key, RateLimitConfig, RateLimiter};
-use uuid::Uuid;
+use serde_json::json;
 use std::sync::OnceLock;
 use std::time::Duration;
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -33,14 +38,23 @@ pub fn register_routes(db: Db, grpc: GrpcClients, email: Option<EmailService>) -
     let state = AppState { db, grpc, email };
     let public = Router::new()
         .route("/health", get(health::health_check))
-        .route("/api/v1/business/register", post(business::register_business))
+        .route(
+            "/api/v1/business/register",
+            post(business::register_business),
+        )
         .route("/api/v1/auth/refresh", post(auth::refresh_token))
         .route("/api/v1/auth/revoke", post(auth::revoke_token));
 
     let auth_limited = Router::new()
         .route("/api/v1/auth/login", post(auth::login))
-        .route("/api/v1/auth/password-reset/request", post(password_reset::request_password_reset))
-        .route("/api/v1/auth/password-reset/reset", post(password_reset::reset_password))
+        .route(
+            "/api/v1/auth/password-reset/request",
+            post(password_reset::request_password_reset),
+        )
+        .route(
+            "/api/v1/auth/password-reset/reset",
+            post(password_reset::reset_password),
+        )
         .route("/api/v1/beta/apply", post(beta::apply_for_beta))
         .layer(from_fn(auth_rate_limit_middleware));
 
@@ -48,13 +62,18 @@ pub fn register_routes(db: Db, grpc: GrpcClients, email: Option<EmailService>) -
     let protected = Router::new()
         .route("/api/v1/api-keys", post(apikey::create_api_key))
         .route("/api/v1/api-keys", get(apikey::list_api_keys))
-        .route("/api/v1/api-keys/:api_key_id/revoke", post(apikey::revoke_api_key))
-        .route("/api/v1/users", post(user::create_sdk_user))
+        .route(
+            "/api/v1/api-keys/:api_key_id/revoke",
+            post(apikey::revoke_api_key),
+        )
         .route("/api/v1/me", get(user::me));
+
+    let sdk_public = Router::new().route("/api/v1/users", post(user::create_sdk_user));
 
     public
         .merge(auth_limited)
         .merge(protected)
+        .merge(sdk_public)
         .layer(from_fn(correlation_id_middleware))
         .layer(from_fn(internal_caller_middleware))
         .with_state(state)
@@ -158,27 +177,64 @@ async fn correlation_id_middleware(req: Request<Body>, next: Next) -> Result<Res
     if should_set_header {
         req.headers_mut().insert(
             "x-correlation-id",
-            correlation_id
-                .parse()
-                .map_err(|_| AppError::Internal)?,
+            correlation_id.parse().map_err(|_| AppError::Internal)?,
         );
     }
 
     let start = std::time::Instant::now();
     tracing::info!(correlation_id = %correlation_id, %method, %path, "start");
 
-    let mut res = next.run(req).await;
+    let mut res = standardize_error_response(next.run(req).await, &correlation_id).await?;
     res.headers_mut().insert(
         "x-correlation-id",
-        correlation_id
-            .parse()
-            .map_err(|_| AppError::Internal)?,
+        correlation_id.parse().map_err(|_| AppError::Internal)?,
     );
     let status = res.status().as_u16();
     let duration_ms = start.elapsed().as_millis();
     log_correlation_request_finished(&correlation_id, &method, &path, status, duration_ms);
 
     Ok(res)
+}
+
+async fn standardize_error_response(
+    res: Response,
+    correlation_id: &str,
+) -> Result<Response, AppError> {
+    let status = res.status();
+    if status < StatusCode::BAD_REQUEST {
+        return Ok(res);
+    }
+
+    let (mut parts, body) = res.into_parts();
+    let bytes = to_bytes(body, 1024 * 1024)
+        .await
+        .map_err(|_| AppError::Internal)?;
+    let message = error_message_from_body(&bytes, status);
+    let body = json!({
+        "status": status.as_u16(),
+        "message": message,
+        "correlationId": correlation_id,
+        "timestamp": Utc::now().to_rfc3339(),
+    });
+
+    parts.headers.insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    Ok(Response::from_parts(parts, Body::from(body.to_string())))
+}
+
+fn error_message_from_body(bytes: &[u8], status: StatusCode) -> String {
+    serde_json::from_slice::<serde_json::Value>(bytes)
+        .ok()
+        .and_then(|body| {
+            body.get("message")
+                .or_else(|| body.get("error"))
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+        })
+        .filter(|message| !message.trim().is_empty())
+        .unwrap_or_else(|| status.canonical_reason().unwrap_or("error").to_string())
 }
 
 static AUTH_RATE_LIMITER: OnceLock<RateLimiter> = OnceLock::new();
@@ -250,8 +306,12 @@ mod tests {
             .header("x-forwarded-for", "203.0.113.10")
             .body(Body::empty())
             .unwrap();
-        req.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
-        assert_eq!(extract_client_key(&req, USERS_TRUSTED_PROXY_IPS), "127.0.0.1");
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
+        assert_eq!(
+            extract_client_key(&req, USERS_TRUSTED_PROXY_IPS),
+            "127.0.0.1"
+        );
     }
 
     #[test]
@@ -263,8 +323,12 @@ mod tests {
             .header("x-forwarded-for", "203.0.113.10, 127.0.0.1")
             .body(Body::empty())
             .unwrap();
-        req.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
-        assert_eq!(extract_client_key(&req, USERS_TRUSTED_PROXY_IPS), "203.0.113.10");
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
+        assert_eq!(
+            extract_client_key(&req, USERS_TRUSTED_PROXY_IPS),
+            "203.0.113.10"
+        );
     }
     #[test]
     fn log_correlation_request_finished_covers_status_branches() {
@@ -278,6 +342,39 @@ mod tests {
     }
 
     #[test]
+    fn error_message_from_body_prefers_error_or_message_field() {
+        assert_eq!(
+            error_message_from_body(br#"{"error":"bad request"}"#, StatusCode::BAD_REQUEST),
+            "bad request"
+        );
+        assert_eq!(
+            error_message_from_body(br#"{"message":"not found"}"#, StatusCode::NOT_FOUND),
+            "not found"
+        );
+        assert_eq!(
+            error_message_from_body(b"not-json", StatusCode::UNAUTHORIZED),
+            "Unauthorized"
+        );
+    }
+
+    #[tokio::test]
+    async fn standardize_error_response_returns_common_shape() {
+        let mut res = Response::new(Body::from(r#"{"error":"blocked"}"#));
+        *res.status_mut() = StatusCode::FORBIDDEN;
+
+        let res = standardize_error_response(res, "cid-123").await.unwrap();
+        let status = res.status();
+        let bytes = to_bytes(res.into_body(), 1024).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body["status"], 403);
+        assert_eq!(body["message"], "blocked");
+        assert_eq!(body["correlationId"], "cid-123");
+        assert!(body["timestamp"].as_str().is_some());
+    }
+
+    #[test]
     fn extract_client_key_ignores_forwarded_ip_when_last_hop_untrusted() {
         let _lock = global_test_lock();
         std::env::set_var(USERS_TRUSTED_PROXY_IPS, "127.0.0.1");
@@ -286,7 +383,11 @@ mod tests {
             .header("x-forwarded-for", "203.0.113.10, 198.51.100.5")
             .body(Body::empty())
             .unwrap();
-        req.extensions_mut().insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
-        assert_eq!(extract_client_key(&req, USERS_TRUSTED_PROXY_IPS), "127.0.0.1");
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))));
+        assert_eq!(
+            extract_client_key(&req, USERS_TRUSTED_PROXY_IPS),
+            "127.0.0.1"
+        );
     }
 }

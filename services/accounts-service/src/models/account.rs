@@ -44,35 +44,14 @@ pub enum AccountStatus {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CreateAccountRequest {
     // account_number is auto-generated, not provided by user
     pub account_type: AccountType,
-    #[serde(default)]
-    pub organization_id: Option<Uuid>,
-    #[serde(default = "default_environment")]
-    pub environment: Option<String>,
-    /// Required when creating account for a platform user (legacy). Omit when using holder metadata (email, first_name, last_name).
-    #[serde(default)]
-    pub user_id: Option<Uuid>,
-    #[serde(default = "default_currency")]
     pub currency: String,
-    #[serde(default)]
-    pub admin_user_id: Option<Uuid>,  // Required for customer accounts (holder-based or legacy)
-    /// Holder-based creation: email (unique per org+env). With first_name, last_name.
-    #[serde(default)]
-    pub email: Option<String>,
-    #[serde(default)]
-    pub first_name: Option<String>,
-    #[serde(default)]
-    pub last_name: Option<String>,
-}
-
-fn default_currency() -> String {
-    "USD".to_string()
-}
-
-fn default_environment() -> Option<String> {
-    Some("sandbox".to_string())
+    pub email: String,
+    pub first_name: String,
+    pub last_name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -119,7 +98,10 @@ impl From<Account> for AccountResponse {
             user_id: account.user_id,
             admin_user_id: account.admin_user_id,
             user_role: account.user_role,
-            currency: account.currency.clone().unwrap_or_else(|| "USD".to_string()),
+            currency: account
+                .currency
+                .clone()
+                .unwrap_or_else(|| "USD".to_string()),
             status: account.status.unwrap_or(AccountStatus::Active),
             created_at: account.created_at,
             updated_at: account.updated_at,

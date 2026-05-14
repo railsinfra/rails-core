@@ -6,22 +6,25 @@ use std::net::SocketAddr;
 
 use axum::extract::ConnectInfo;
 use axum::http::HeaderMap;
-use axum::{Json, extract::State};
+use axum::{extract::State, Json};
 
 use crate::audit_emit;
 use crate::grpc::audit_proto::ActorType;
+use argon2::password_hash::{
+    rand_core::{OsRng, RngCore},
+    SaltString,
+};
 use argon2::{Argon2, PasswordHasher};
-use argon2::password_hash::{rand_core::{OsRng, RngCore}, SaltString};
-use chrono::{Utc, Duration};
-use uuid::Uuid;
-use serde::{Deserialize, Serialize};
-use sqlx::Row;
-use sha2::{Sha256, Digest};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64_ENGINE;
 use base64::Engine;
+use chrono::{Duration, Utc};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use sqlx::Row;
+use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::routes::{AppState, user};
+use crate::routes::{user, AppState};
 
 #[derive(Deserialize)]
 pub struct RequestPasswordResetRequest {
@@ -55,16 +58,15 @@ async fn request_password_reset_inner(
 ) -> Result<(RequestPasswordResetResponse, PasswordResetRequestOutcome), AppError> {
     // Always return success to prevent user enumeration
     // This is a security best practice
-    
+
     // Find user by email (only active users); normalize for case-insensitive lookup
     let email_normalized = user::normalize_email(&payload.email);
-    let user_row = sqlx::query(
-        "SELECT id FROM users WHERE email = $1 AND status = 'active' LIMIT 1"
-    )
-    .bind(&email_normalized)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|_| AppError::Internal)?;
+    let user_row =
+        sqlx::query("SELECT id FROM users WHERE email = $1 AND status = 'active' LIMIT 1")
+            .bind(&email_normalized)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|_| AppError::Internal)?;
 
     // If user doesn't exist, still return success (no enumeration)
     let user_id: Uuid = match user_row {
@@ -73,8 +75,9 @@ async fn request_password_reset_inner(
             tracing::info!("Password reset requested for non-existent account");
             return Ok((
                 RequestPasswordResetResponse {
-                    message: "If an account exists with that email, a password reset link has been sent."
-                        .to_string(),
+                    message:
+                        "If an account exists with that email, a password reset link has been sent."
+                            .to_string(),
                 },
                 PasswordResetRequestOutcome::NoSuchUser,
             ));
@@ -99,7 +102,7 @@ async fn request_password_reset_inner(
     // Invalidate all previous reset tokens for this user
     // This ensures only the latest token is usable
     sqlx::query(
-        "UPDATE password_reset_tokens SET used_at = $1 WHERE user_id = $2 AND used_at IS NULL"
+        "UPDATE password_reset_tokens SET used_at = $1 WHERE user_id = $2 AND used_at IS NULL",
     )
     .bind(&now)
     .bind(&user_id)
@@ -124,9 +127,15 @@ async fn request_password_reset_inner(
 
     // Send email (best-effort, don't fail if email fails)
     if let Some(email_service) = &state.email {
-        match email_service.send_password_reset(&payload.email, &raw_token).await {
+        match email_service
+            .send_password_reset(&payload.email, &raw_token)
+            .await
+        {
             Ok(_) => {
-                tracing::info!("Password reset email sent successfully to {}", payload.email);
+                tracing::info!(
+                    "Password reset email sent successfully to {}",
+                    payload.email
+                );
             }
             Err(e) => {
                 // Log error but don't fail the request
@@ -147,7 +156,8 @@ async fn request_password_reset_inner(
 
     Ok((
         RequestPasswordResetResponse {
-            message: "If an account exists with that email, a password reset link has been sent.".to_string(),
+            message: "If an account exists with that email, a password reset link has been sent."
+                .to_string(),
         },
         PasswordResetRequestOutcome::Issued {
             user_id,
@@ -170,18 +180,16 @@ pub async fn request_password_reset(
     match request_password_reset_inner(state.clone(), Json(payload)).await {
         Ok((body, outcome)) => {
             let (org, actor, actor_id, tgt) = match &outcome {
-                PasswordResetRequestOutcome::NoSuchUser => {
-                    (Uuid::nil(), ActorType::Anonymous, String::default(), Uuid::nil())
-                }
+                PasswordResetRequestOutcome::NoSuchUser => (
+                    Uuid::nil(),
+                    ActorType::Anonymous,
+                    String::default(),
+                    Uuid::nil(),
+                ),
                 PasswordResetRequestOutcome::Issued {
                     user_id,
                     business_id,
-                } => (
-                    *business_id,
-                    ActorType::User,
-                    user_id.to_string(),
-                    *user_id,
-                ),
+                } => (*business_id, ActorType::User, user_id.to_string(), *user_id),
             };
             audit_emit::emit_users_mutation(
                 &state.grpc,
@@ -280,7 +288,9 @@ async fn reset_password_inner(
 
     // Validate password strength (minimum 8 characters)
     if payload.new_password.len() < 8 {
-        return Err(AppError::BadRequest("Password must be at least 8 characters long".to_string()));
+        return Err(AppError::BadRequest(
+            "Password must be at least 8 characters long".to_string(),
+        ));
     }
 
     // Hash new password
@@ -295,17 +305,19 @@ async fn reset_password_inner(
 
     // Atomically claim the token inside the transaction to prevent races
     let token_row = sqlx::query(claim_token_sql())
-    .bind(&Utc::now())
-    .bind(&token_hash)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|_| AppError::Internal)?;
+        .bind(&Utc::now())
+        .bind(&token_hash)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| AppError::Internal)?;
 
     let (token_id, user_id): (Uuid, Uuid) = match token_row {
         Some(row) => (row.get("id"), row.get("user_id")),
         None => {
             // Generic error - don't reveal if token doesn't exist, expired, or already used
-            return Err(AppError::BadRequest("Invalid or expired reset token".to_string()));
+            return Err(AppError::BadRequest(
+                "Invalid or expired reset token".to_string(),
+            ));
         }
     };
 
@@ -317,15 +329,13 @@ async fn reset_password_inner(
     let business_id: Uuid = business_row.get("business_id");
 
     // Update user password
-    sqlx::query(
-        "UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3"
-    )
-    .bind(&password_hash)
-    .bind(&Utc::now())
-    .bind(&user_id)
-    .execute(&mut *tx)
-    .await
-    .map_err(|_| AppError::Internal)?;
+    sqlx::query("UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3")
+        .bind(&password_hash)
+        .bind(&Utc::now())
+        .bind(&user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| AppError::Internal)?;
 
     // Invalidate all other reset tokens for this user (security: single-use)
     sqlx::query(
@@ -340,11 +350,11 @@ async fn reset_password_inner(
 
     // Revoke all active sessions for this user to invalidate refresh tokens
     sqlx::query(revoke_user_sessions_sql())
-    .bind(&Utc::now())
-    .bind(&user_id)
-    .execute(&mut *tx)
-    .await
-    .map_err(|_| AppError::Internal)?;
+        .bind(&Utc::now())
+        .bind(&user_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| AppError::Internal)?;
 
     tx.commit().await.map_err(|_| AppError::Internal)?;
 
@@ -352,7 +362,9 @@ async fn reset_password_inner(
 
     Ok((
         ResetPasswordResponse {
-            message: "Password has been reset successfully. You can now log in with your new password.".to_string(),
+            message:
+                "Password has been reset successfully. You can now log in with your new password."
+                    .to_string(),
         },
         user_id,
         business_id,

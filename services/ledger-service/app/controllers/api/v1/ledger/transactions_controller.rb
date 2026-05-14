@@ -55,7 +55,7 @@ module Api
             .first
 
           unless transaction
-            render json: { error: 'Transaction not found' }, status: :not_found
+            render_error 'Transaction not found', status: :not_found
             return
           end
 
@@ -87,10 +87,10 @@ module Api
 
         def authenticate_request
           auth_header = request.headers['Authorization']
-          return render json: { error: 'Unauthorized' }, status: :unauthorized unless auth_header
+          return render_error 'Unauthorized', status: :unauthorized unless auth_header
 
           token = auth_header.split(' ').last
-          return render json: { error: 'Unauthorized' }, status: :unauthorized unless token
+          return render_error 'Unauthorized', status: :unauthorized unless token
 
           # Decode JWT to get business_id (which we use as organization_id)
           begin
@@ -101,7 +101,7 @@ module Api
             @organization_id = payload['business_id'] || payload['businessId']
             
             unless @organization_id
-              render json: { error: 'Invalid token: missing business_id' }, status: :unauthorized
+              render_error 'Invalid token: missing business_id', status: :unauthorized
               return
             end
             
@@ -109,15 +109,15 @@ module Api
             @organization_id = @organization_id.to_s
           rescue JWT::ExpiredSignature => e
             Rails.logger.error("JWT expired: #{e.message}")
-            render json: { error: 'Token has expired' }, status: :unauthorized
+            render_error 'Token has expired', status: :unauthorized
             return
           rescue JWT::DecodeError => e
             Rails.logger.error("JWT decode error: #{e.class}: #{e.message}")
-            render json: { error: "Invalid token: #{e.message}" }, status: :unauthorized
+            render_error "Invalid token: #{e.message}", status: :unauthorized
             return
           rescue => e
             Rails.logger.error("Unexpected authentication error: #{e.class}: #{e.message}")
-            render json: { error: 'Authentication failed' }, status: :unauthorized
+            render_error 'Authentication failed', status: :unauthorized
             return
           end
         end
@@ -128,7 +128,7 @@ module Api
 
           # Validate environment
           unless %w[sandbox production].include?(@environment)
-            render json: { error: 'Invalid environment. Must be sandbox or production' }, status: :bad_request
+            render_error 'Invalid environment. Must be sandbox or production', status: :bad_request
             return
           end
         end

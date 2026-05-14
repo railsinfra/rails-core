@@ -25,6 +25,11 @@ class ApiLedgerTransactionsTest < ActionDispatch::IntegrationTest
           "X-Environment" => "staging"
         }
     assert_response :bad_request
+    body = JSON.parse(response.body)
+    assert_equal 400, body["status"]
+    assert_match(/Invalid environment/i, body["message"])
+    assert body["correlationId"].present?
+    assert body["timestamp"].present?
   end
 
   test "transactions index returns posted transaction" do
@@ -79,6 +84,9 @@ class ApiLedgerTransactionsTest < ActionDispatch::IntegrationTest
           "X-Environment" => "sandbox"
         }
     assert_response :not_found
+    body = JSON.parse(response.body)
+    assert_equal 404, body["status"]
+    assert_equal "Transaction not found", body["message"]
   end
 
   test "transactions show returns transaction json" do

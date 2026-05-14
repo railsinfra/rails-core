@@ -34,7 +34,10 @@ impl RateLimiter {
         let now = Instant::now();
         let entry = store
             .entry(client_key.to_string())
-            .or_insert(RateLimitWindow { start: now, count: 0 });
+            .or_insert(RateLimitWindow {
+                start: now,
+                count: 0,
+            });
 
         if now.duration_since(entry.start) > self.config.window {
             entry.start = now;
@@ -52,7 +55,10 @@ impl RateLimiter {
     /// Clears all clients (used by unit tests; production uses process restart).
     #[cfg(test)]
     pub fn reset(&self) {
-        self.store.lock().expect("rate limiter lock poisoned").clear();
+        self.store
+            .lock()
+            .expect("rate limiter lock poisoned")
+            .clear();
     }
 }
 
@@ -172,9 +178,11 @@ mod tests {
             .header("x-real-ip", "198.51.100.33")
             .body(Body::empty())
             .unwrap();
-        req.extensions_mut().insert(axum::extract::ConnectInfo(
-            std::net::SocketAddr::from(([127, 0, 0, 1], 8080)),
-        ));
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                [127, 0, 0, 1],
+                8080,
+            ))));
         assert_eq!(
             extract_client_key(&req, USERS_TRUSTED_PROXY_IPS),
             "198.51.100.33"
@@ -190,9 +198,11 @@ mod tests {
             .header("x-forwarded-for", " , 203.0.113.10 , 127.0.0.1 ")
             .body(Body::empty())
             .unwrap();
-        req.extensions_mut().insert(axum::extract::ConnectInfo(
-            std::net::SocketAddr::from(([127, 0, 0, 1], 8080)),
-        ));
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                [127, 0, 0, 1],
+                8080,
+            ))));
         assert_eq!(
             extract_client_key(&req, USERS_TRUSTED_PROXY_IPS),
             "203.0.113.10"
@@ -234,9 +244,6 @@ mod tests {
             .uri("/api/v1/auth/login")
             .body(Body::empty())
             .unwrap();
-        assert_eq!(
-            extract_client_key(&req, USERS_TRUSTED_PROXY_IPS),
-            "unknown"
-        );
+        assert_eq!(extract_client_key(&req, USERS_TRUSTED_PROXY_IPS), "unknown");
     }
 }

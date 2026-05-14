@@ -1,4 +1,24 @@
 class ApplicationController < ActionController::API
+  private
+
+  def render_error(message, status:)
+    response.set_header('X-Correlation-Id', correlation_id)
+    render json: {
+      status: Rack::Utils.status_code(status),
+      message: message,
+      correlationId: correlation_id,
+      timestamp: Time.current.iso8601
+    }, status: status
+  end
+
+  def correlation_id
+    @correlation_id ||= request.headers['X-Correlation-Id'].presence ||
+                        request.request_id ||
+                        SecureRandom.uuid
+  end
+
+  public
+
   def health
     # Health check should return 200 OK as long as Rails is running
     # gRPC status is informational only - don't fail health check if gRPC isn't ready yet

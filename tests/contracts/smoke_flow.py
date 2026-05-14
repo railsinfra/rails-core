@@ -46,15 +46,16 @@ def request_json(
         raise RuntimeError(f"HTTP {e.code} {method} {url}: {body}") from e
 
 
-def main() -> int:
-    base = gateway_base()
+def generate_suffix_and_emails() -> tuple[str, str, str]:
     suffix = uuid.uuid4().hex[:12]
-    admin_email = f"contract-{suffix}@example.com"
-    holder_email = f"holder-{suffix}@example.com"
+    return (
+        suffix,
+        f"contract-{suffix}@example.com",
+        f"holder-{suffix}@example.com",
+    )
 
-    print(f"Using gateway {base}")
 
-    # 1) Register business (creates org + admin user + JWT)
+def register_business(base: str, admin_email: str, suffix: str) -> dict:
     reg_url = f"{base}/users/api/v1/business/register"
     _, reg = request_json(
         "POST",
@@ -68,16 +69,29 @@ def main() -> int:
             "admin_password": "SecurePass123!",
         },
     )
-    access = reg["access_token"]
-    env_id = str(reg["selected_environment_id"])
-    business_id = str(reg["business_id"])
-    admin_user_id = str(reg["admin_user_id"])
-    if not access or not business_id or not admin_user_id:
-        print("FAIL register: missing token or ids", file=sys.stderr)
+    return reg
+
+
+def validate_registration(reg: dict) -> tuple[str, str, str, str] | int:
+    access = reg.get("access_token")
+    env_id = str(reg.get("selected_environment_id", ""))
+    business_id = str(reg.get("business_id", ""))
+    admin_user_id = str(reg.get("admin_user_id", ""))
+    missing = []
+    if not access:
+        missing.append("access token")
+    if not business_id:
+        missing.append("business_id")
+    if not admin_user_id:
+        missing.append("admin_user_id")
+    if missing:
+        print(f"FAIL register: missing {', '.join(missing)}", file=sys.stderr)
         return 1
     print(f"OK  users register business_id={business_id} admin_user_id={admin_user_id}")
+    return access, env_id, business_id, admin_user_id
 
-    # 2) Server API key
+
+def create_api_key(base: str, access: str, env_id: str) -> str | int:
     key_url = f"{base}/users/api/v1/api-keys"
     _, key_body = request_json(
         "POST",
@@ -88,13 +102,46 @@ def main() -> int:
         },
         json_body={"environment_id": env_id},
     )
-    api_key = key_body.get("key")
-    if not api_key:
-        print("FAIL api key response missing plaintext key", file=sys.stderr)
-        return 1
-    print("OK  users api key created")
+    api_key_id = str(key_body.get("id", ""))
+    api_key = key_body.get("key", "")
+    if not api_key_id or not api_key:
+        print("FAIL api-key: missing id or key", file=sys.stderr)
+        return 2
+    print(f"OK  users api-key id={api_key_id}")
+    return api_key
 
-    # 3) Account (holder path — ties to org via API key)
+
+def create_sdk_user(base: str, api_key: str, holder_email: str, suffix: str) -> str | int:
+    user_url = f"{base}/users/api/v1/users"
+    _, user_body = request_json(
+        "POST",
+        user_url,
+        headers={
+            "X-API-Key": api_key,
+            "X-Environment": "sandbox",
+        },
+        json_body={
+            "email": holder_email,
+            "first_name": "H",
+            "last_name": "older",
+            "password": f"Passw0rd-{suffix}!",
+        },
+    )
+    expected_user_id = str(user_body.get("user_id") or "")
+    if not expected_user_id:
+        print("FAIL sdk user response missing user_id", file=sys.stderr)
+        return 1
+    print(f"OK  users sdk user created user_id={expected_user_id}")
+    return expected_user_id
+
+
+def create_account(
+    base: str,
+    api_key: str,
+    holder_email: str,
+    business_id: str,
+    expected_user_id: str,
+) -> str | int:
     acc_url = f"{base}/accounts/api/v1/accounts"
     _, account = request_json(
         "POST",
@@ -120,12 +167,17 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    if holder_id is None and user_id is None:
-        print("FAIL account: expected holder_id or user_id", file=sys.stderr)
+    if holder_id is not None or user_id != expected_user_id:
+        print(
+            f"FAIL account: expected user_id={expected_user_id!r} and holder_id=None, got holder_id={holder_id!r} user_id={user_id!r}",
+            file=sys.stderr,
+        )
         return 1
     print(f"OK  accounts create account_id={account_id} holder_id={holder_id} user_id={user_id}")
+    return account_id
 
-    # 4) Deposit (posts through accounts → ledger gRPC)
+
+def deposit_to_account(base: str, account_id: str, suffix: str) -> int:
     dep_url = f"{base}/accounts/api/v1/accounts/{account_id}/deposit"
     _, dep = request_json(
         "POST",
@@ -140,8 +192,10 @@ def main() -> int:
         print(f"FAIL deposit response shape: {list(dep.keys())}", file=sys.stderr)
         return 1
     print("OK  accounts deposit (ledger mutation)")
+    return 0
 
-    # 5) Ledger HTTP: list entries for this external account
+
+def verify_ledger_entries(base: str, access: str, account_id: str) -> int:
     entries_url = f"{base}/ledger/api/v1/ledger/entries?account_id={account_id}&per_page=20"
     _, entries = request_json(
         "GET",
@@ -160,6 +214,41 @@ def main() -> int:
         print(f"FAIL ledger entries missing account_id {account_id} in {ext_ids}", file=sys.stderr)
         return 1
     print(f"OK  ledger entries (n={len(rows)}) reference account {account_id}")
+    return 0
+
+
+def main() -> int:
+    base = gateway_base()
+    suffix, admin_email, holder_email = generate_suffix_and_emails()
+
+    print(f"Using gateway {base}")
+
+    reg = register_business(base, admin_email, suffix)
+    result = validate_registration(reg)
+    if isinstance(result, int):
+        return result
+    access, env_id, business_id, _admin_user_id = result
+
+    api_key_result = create_api_key(base, access, env_id)
+    if isinstance(api_key_result, int):
+        return api_key_result
+    api_key = api_key_result
+
+    expected_user_id = create_sdk_user(base, api_key, holder_email, suffix)
+    if isinstance(expected_user_id, int):
+        return expected_user_id
+
+    account_id = create_account(base, api_key, holder_email, business_id, expected_user_id)
+    if isinstance(account_id, int):
+        return account_id
+
+    deposit_result = deposit_to_account(base, account_id, suffix)
+    if deposit_result:
+        return deposit_result
+
+    ledger_result = verify_ledger_entries(base, access, account_id)
+    if ledger_result:
+        return ledger_result
 
     # Gateway path sanity: all three prefixes served something versioned above
     print("OK  contract flow complete")

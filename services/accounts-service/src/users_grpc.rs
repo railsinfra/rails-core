@@ -15,6 +15,13 @@ pub struct UsersGrpc {
     client: UsersServiceClient<Channel>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedAccountUser {
+    pub business_id: Uuid,
+    pub environment_id: Uuid,
+    pub user_id: Uuid,
+}
+
 impl UsersGrpc {
     /// Create a lazy gRPC client. Connection happens on first RPC, so startup is not blocked
     /// if the users service is temporarily unreachable (e.g. during Railway deployment).
@@ -46,27 +53,83 @@ impl UsersGrpc {
             .await
             .map_err(|e| {
                 let msg = e.message().to_string();
-                if e.code() == tonic::Code::Unauthenticated || e.code() == tonic::Code::InvalidArgument {
+                if e.code() == tonic::Code::Unauthenticated
+                    || e.code() == tonic::Code::InvalidArgument
+                {
                     AppError::Unauthorized(msg)
                 } else {
                     AppError::Internal(format!("Users gRPC error: {}", msg))
                 }
             })?;
         let r = res.into_inner();
-        let business_id = Uuid::parse_str(&r.business_id)
-            .map_err(|_| AppError::Internal("Invalid business_id from users service".to_string()))?;
-        let environment_id = Uuid::parse_str(&r.environment_id)
-            .map_err(|_| AppError::Internal("Invalid environment_id from users service".to_string()))?;
-        let admin_user_id = Uuid::parse_str(&r.admin_user_id)
-            .map_err(|_| AppError::Internal("Invalid admin_user_id from users service".to_string()))?;
+        let business_id = Uuid::parse_str(&r.business_id).map_err(|_| {
+            AppError::Internal("Invalid business_id from users service".to_string())
+        })?;
+        let environment_id = Uuid::parse_str(&r.environment_id).map_err(|_| {
+            AppError::Internal("Invalid environment_id from users service".to_string())
+        })?;
+        let admin_user_id = Uuid::parse_str(&r.admin_user_id).map_err(|_| {
+            AppError::Internal("Invalid admin_user_id from users service".to_string())
+        })?;
         Ok((business_id, environment_id, admin_user_id))
+    }
+
+    /// Resolve an existing active user for account creation using API-key business scope.
+    pub async fn resolve_account_user_for_api_key(
+        &self,
+        api_key: &str,
+        environment: &str,
+        email: &str,
+        first_name: &str,
+        last_name: &str,
+    ) -> Result<ResolvedAccountUser, AppError> {
+        use tonic::Request;
+        let req = users_proto::ResolveAccountUserForApiKeyRequest {
+            api_key: api_key.to_string(),
+            environment: environment.to_string(),
+            email: email.to_string(),
+            first_name: first_name.to_string(),
+            last_name: last_name.to_string(),
+        };
+        let res = self
+            .client
+            .clone()
+            .resolve_account_user_for_api_key(Request::new(req))
+            .await
+            .map_err(|e| {
+                let msg = e.message().to_string();
+                match e.code() {
+                    tonic::Code::Unauthenticated => AppError::Unauthorized(msg),
+                    tonic::Code::InvalidArgument
+                    | tonic::Code::NotFound
+                    | tonic::Code::FailedPrecondition => AppError::Validation(msg),
+                    _ => AppError::Internal(format!("Users gRPC error: {}", msg)),
+                }
+            })?;
+        let r = res.into_inner();
+        let business_id = Uuid::parse_str(&r.business_id).map_err(|_| {
+            AppError::Internal("Invalid business_id from users service".to_string())
+        })?;
+        let environment_id = Uuid::parse_str(&r.environment_id).map_err(|_| {
+            AppError::Internal("Invalid environment_id from users service".to_string())
+        })?;
+        let user_id = Uuid::parse_str(&r.user_id)
+            .map_err(|_| AppError::Internal("Invalid user_id from users service".to_string()))?;
+        Ok(ResolvedAccountUser {
+            business_id,
+            environment_id,
+            user_id,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::users_proto::users_service_server::{UsersService, UsersServiceServer};
-    use super::users_proto::{ValidateApiKeyRequest, ValidateApiKeyResponse};
+    use super::users_proto::{
+        ResolveAccountUserForApiKeyRequest, ResolveAccountUserForApiKeyResponse,
+        ValidateApiKeyRequest, ValidateApiKeyResponse,
+    };
     use super::UsersGrpc;
     use std::net::SocketAddr;
     use tokio_stream::wrappers::TcpListenerStream;
@@ -88,6 +151,17 @@ mod tests {
                 admin_user_id: uuid::Uuid::nil().to_string(),
             }))
         }
+
+        async fn resolve_account_user_for_api_key(
+            &self,
+            _req: Request<ResolveAccountUserForApiKeyRequest>,
+        ) -> Result<Response<ResolveAccountUserForApiKeyResponse>, Status> {
+            Ok(Response::new(ResolveAccountUserForApiKeyResponse {
+                business_id: uuid::Uuid::nil().to_string(),
+                environment_id: uuid::Uuid::nil().to_string(),
+                user_id: uuid::Uuid::nil().to_string(),
+            }))
+        }
     }
 
     #[derive(Clone, Default)]
@@ -99,6 +173,13 @@ mod tests {
             &self,
             _req: Request<ValidateApiKeyRequest>,
         ) -> Result<Response<ValidateApiKeyResponse>, Status> {
+            Err(Status::unauthenticated("bad key"))
+        }
+
+        async fn resolve_account_user_for_api_key(
+            &self,
+            _req: Request<ResolveAccountUserForApiKeyRequest>,
+        ) -> Result<Response<ResolveAccountUserForApiKeyResponse>, Status> {
             Err(Status::unauthenticated("bad key"))
         }
     }
@@ -113,6 +194,13 @@ mod tests {
             _req: Request<ValidateApiKeyRequest>,
         ) -> Result<Response<ValidateApiKeyResponse>, Status> {
             Err(Status::invalid_argument("bad"))
+        }
+
+        async fn resolve_account_user_for_api_key(
+            &self,
+            _req: Request<ResolveAccountUserForApiKeyRequest>,
+        ) -> Result<Response<ResolveAccountUserForApiKeyResponse>, Status> {
+            Err(Status::not_found("missing user"))
         }
     }
 
@@ -130,6 +218,37 @@ mod tests {
                 environment_id: uuid::Uuid::nil().to_string(),
                 admin_user_id: uuid::Uuid::nil().to_string(),
             }))
+        }
+
+        async fn resolve_account_user_for_api_key(
+            &self,
+            _req: Request<ResolveAccountUserForApiKeyRequest>,
+        ) -> Result<Response<ResolveAccountUserForApiKeyResponse>, Status> {
+            Ok(Response::new(ResolveAccountUserForApiKeyResponse {
+                business_id: uuid::Uuid::nil().to_string(),
+                environment_id: uuid::Uuid::nil().to_string(),
+                user_id: "not-a-uuid".into(),
+            }))
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct MockUnavailable;
+
+    #[tonic::async_trait]
+    impl UsersService for MockUnavailable {
+        async fn validate_api_key(
+            &self,
+            _req: Request<ValidateApiKeyRequest>,
+        ) -> Result<Response<ValidateApiKeyResponse>, Status> {
+            Err(Status::unavailable("users offline"))
+        }
+
+        async fn resolve_account_user_for_api_key(
+            &self,
+            _req: Request<ResolveAccountUserForApiKeyRequest>,
+        ) -> Result<Response<ResolveAccountUserForApiKeyResponse>, Status> {
+            Err(Status::unavailable("users offline"))
         }
     }
 
@@ -156,17 +275,17 @@ mod tests {
         let res = UsersGrpc::connect_lazy("%%%not-uri");
         assert!(res.is_err(), "expected invalid URL error");
         let msg = format!("{}", res.err().expect("err"));
-        assert!(msg.contains("USERS_GRPC_URL") || msg.contains("Invalid"), "{msg}");
+        assert!(
+            msg.contains("USERS_GRPC_URL") || msg.contains("Invalid"),
+            "{msg}"
+        );
     }
 
     #[tokio::test]
     async fn validate_api_key_ok_round_trip() {
         let url = users_base_url(MockOk::default()).await;
         let grpc = UsersGrpc::connect_lazy(&url).expect("lazy");
-        let (b, e, a) = grpc
-            .validate_api_key("k", "sandbox")
-            .await
-            .expect("ok");
+        let (b, e, a) = grpc.validate_api_key("k", "sandbox").await.expect("ok");
         assert_eq!(b, uuid::Uuid::nil());
         assert_eq!(e, uuid::Uuid::nil());
         assert_eq!(a, uuid::Uuid::nil());
@@ -200,6 +319,63 @@ mod tests {
         let grpc = UsersGrpc::connect_lazy(&url).expect("lazy");
         let err = grpc
             .validate_api_key("k", "sandbox")
+            .await
+            .expect_err("internal");
+        assert!(matches!(err, crate::errors::AppError::Internal(_)));
+    }
+
+    #[tokio::test]
+    async fn resolve_account_user_ok_round_trip() {
+        let url = users_base_url(MockOk::default()).await;
+        let grpc = UsersGrpc::connect_lazy(&url).expect("lazy");
+        let resolved = grpc
+            .resolve_account_user_for_api_key("k", "sandbox", "a@example.com", "A", "B")
+            .await
+            .expect("ok");
+        assert_eq!(resolved.business_id, uuid::Uuid::nil());
+        assert_eq!(resolved.environment_id, uuid::Uuid::nil());
+        assert_eq!(resolved.user_id, uuid::Uuid::nil());
+    }
+
+    #[tokio::test]
+    async fn resolve_account_user_maps_user_miss_to_validation() {
+        let url = users_base_url(MockInvalidArg::default()).await;
+        let grpc = UsersGrpc::connect_lazy(&url).expect("lazy");
+        let err = grpc
+            .resolve_account_user_for_api_key("k", "sandbox", "a@example.com", "A", "B")
+            .await
+            .expect_err("validation");
+        assert!(matches!(err, crate::errors::AppError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn resolve_account_user_maps_unauthenticated() {
+        let url = users_base_url(MockUnauth::default()).await;
+        let grpc = UsersGrpc::connect_lazy(&url).expect("lazy");
+        let err = grpc
+            .resolve_account_user_for_api_key("k", "sandbox", "a@example.com", "A", "B")
+            .await
+            .expect_err("unauth");
+        assert!(matches!(err, crate::errors::AppError::Unauthorized(_)));
+    }
+
+    #[tokio::test]
+    async fn resolve_account_user_invalid_uuid_is_internal() {
+        let url = users_base_url(MockBadIds::default()).await;
+        let grpc = UsersGrpc::connect_lazy(&url).expect("lazy");
+        let err = grpc
+            .resolve_account_user_for_api_key("k", "sandbox", "a@example.com", "A", "B")
+            .await
+            .expect_err("internal");
+        assert!(matches!(err, crate::errors::AppError::Internal(_)));
+    }
+
+    #[tokio::test]
+    async fn resolve_account_user_maps_unexpected_status_to_internal() {
+        let url = users_base_url(MockUnavailable::default()).await;
+        let grpc = UsersGrpc::connect_lazy(&url).expect("lazy");
+        let err = grpc
+            .resolve_account_user_for_api_key("k", "sandbox", "a@example.com", "A", "B")
             .await
             .expect_err("internal");
         assert!(matches!(err, crate::errors::AppError::Internal(_)));

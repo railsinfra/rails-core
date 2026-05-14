@@ -3,21 +3,21 @@ use std::net::SocketAddr;
 
 use axum::extract::ConnectInfo;
 use axum::http::HeaderMap;
-use axum::{Json, extract::State};
+use axum::{extract::State, Json};
 use uuid::Uuid;
 
 use crate::audit_emit;
-use crate::grpc::audit_proto::ActorType;
-use chrono::{Utc, Duration};
 use crate::error::{AppError, DUPLICATE_EMAIL_MESSAGE};
-use crate::routes::{AppState, user};
-use serde::{Deserialize, Serialize};
-use argon2::{Argon2, PasswordHasher};
-use argon2::password_hash::{SaltString, rand_core::OsRng};
+use crate::grpc::audit_proto::ActorType;
+use crate::routes::{user, AppState};
 use argon2::password_hash::rand_core::RngCore;
+use argon2::password_hash::{rand_core::OsRng, SaltString};
+use argon2::{Argon2, PasswordHasher};
 use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
 use base64::engine::Engine;
+use chrono::{Duration, Utc};
 use jsonwebtoken::{encode, EncodingKey, Header};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 #[derive(Deserialize)]
@@ -27,7 +27,7 @@ pub struct RegisterBusinessRequest {
     pub admin_first_name: String,
     pub admin_last_name: String,
     pub admin_email: String,
-    pub admin_password: String
+    pub admin_password: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -45,7 +45,7 @@ pub struct RegisterBusinessResponse {
 #[derive(Debug, Serialize)]
 pub struct EnvironmentInfo {
     pub id: Uuid,
-    pub r#type: String
+    pub r#type: String,
 }
 
 async fn register_business_inner(
@@ -58,13 +58,12 @@ async fn register_business_inner(
     }
 
     // Application-level check before insert (defense in depth with DB constraint)
-    let exists = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)"
-    )
-    .bind(&admin_email_normalized)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|_| AppError::Internal)?;
+    let exists =
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)")
+            .bind(&admin_email_normalized)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|_| AppError::Internal)?;
     if exists {
         return Err(AppError::Conflict(DUPLICATE_EMAIL_MESSAGE.to_string()));
     }
@@ -313,7 +312,11 @@ mod tests {
             Json(payload),
         )
         .await;
-        assert!(result.is_ok(), "Unique email registration should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Unique email registration should succeed: {:?}",
+            result.err()
+        );
     }
 
     #[tokio::test]
@@ -356,7 +359,10 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         if let AppError::Conflict(msg) = err {
-            assert_eq!(msg, DUPLICATE_EMAIL_MESSAGE, "Error message should be stable and user-friendly");
+            assert_eq!(
+                msg, DUPLICATE_EMAIL_MESSAGE,
+                "Error message should be stable and user-friendly"
+            );
         } else {
             panic!("Expected Conflict, got {:?}", err);
         }
@@ -399,8 +405,15 @@ mod tests {
             Json(payload2),
         )
         .await;
-        assert!(result.is_err(), "Case-insensitive duplicate should be blocked");
+        assert!(
+            result.is_err(),
+            "Case-insensitive duplicate should be blocked"
+        );
         let err = result.unwrap_err();
-        assert!(matches!(err, AppError::Conflict(_)), "Expected Conflict for case variant: {:?}", err);
+        assert!(
+            matches!(err, AppError::Conflict(_)),
+            "Expected Conflict for case variant: {:?}",
+            err
+        );
     }
 }

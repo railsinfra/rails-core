@@ -83,7 +83,9 @@ fn validate_occurred_at(event: &AuditEvent) -> Result<(), Status> {
         .with_timezone(&Utc);
 
     if occurred_at > Utc::now() + chrono::Duration::minutes(5) {
-        return Err(Status::invalid_argument("occurred_at cannot be far in the future"));
+        return Err(Status::invalid_argument(
+            "occurred_at cannot be far in the future",
+        ));
     }
     Ok(())
 }
@@ -140,7 +142,10 @@ fn validate_outcome(event: &AuditEvent) -> Result<(), Status> {
 }
 
 fn validate_actor(event: &AuditEvent) -> Result<(), Status> {
-    let actor = event.actor.as_ref().ok_or_else(|| Status::invalid_argument("actor is required"))?;
+    let actor = event
+        .actor
+        .as_ref()
+        .ok_or_else(|| Status::invalid_argument("actor is required"))?;
     let actor_type = ActorType::try_from(actor.r#type)
         .map_err(|_| Status::invalid_argument("invalid actor type"))?;
     if actor_type == ActorType::Unspecified {
@@ -155,7 +160,9 @@ fn validate_target(event: &AuditEvent) -> Result<(), Status> {
         .as_ref()
         .ok_or_else(|| Status::invalid_argument("target is required"))?;
     if target.r#type.trim().is_empty() || target.id.trim().is_empty() {
-        return Err(Status::invalid_argument("target.type and target.id are required"));
+        return Err(Status::invalid_argument(
+            "target.type and target.id are required",
+        ));
     }
     Ok(())
 }
@@ -166,7 +173,9 @@ fn validate_request(event: &AuditEvent) -> Result<(), Status> {
         .as_ref()
         .ok_or_else(|| Status::invalid_argument("request is required"))?;
     if req.method.trim().is_empty() || req.path.trim().is_empty() {
-        return Err(Status::invalid_argument("request.method and request.path are required"));
+        return Err(Status::invalid_argument(
+            "request.method and request.path are required",
+        ));
     }
     Ok(())
 }
@@ -184,14 +193,20 @@ fn validate_reason(event: &AuditEvent) -> Result<(), Status> {
 fn validate_metadata(event: &AuditEvent) -> Result<(), Status> {
     let allowed_meta = static_metadata_keys();
     if event.metadata.len() > 16 {
-        return Err(Status::invalid_argument("metadata may have at most 16 entries"));
+        return Err(Status::invalid_argument(
+            "metadata may have at most 16 entries",
+        ));
     }
     for (k, v) in &event.metadata {
         if !allowed_meta.contains(k.as_str()) {
-            return Err(Status::invalid_argument("metadata key not allowlisted for v1"));
+            return Err(Status::invalid_argument(
+                "metadata key not allowlisted for v1",
+            ));
         }
         if v.chars().count() > 256 {
-            return Err(Status::invalid_argument("metadata value exceeds 256 characters"));
+            return Err(Status::invalid_argument(
+                "metadata value exceeds 256 characters",
+            ));
         }
     }
     Ok(())
@@ -270,8 +285,7 @@ mod tests {
     fn rejects_metadata_value_too_long() {
         let mut e = base_event();
         e.organization_id = Uuid::new_v4().to_string();
-        e.metadata
-            .insert("http_status".into(), "x".repeat(257));
+        e.metadata.insert("http_status".into(), "x".repeat(257));
         assert!(validate_audit_event(&e).is_err());
     }
 }

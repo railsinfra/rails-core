@@ -16,7 +16,8 @@ class LedgerService < Rails::Ledger::V1::LedgerService::Service
     source_external_account_id = raw_source.to_s
     destination_external_account_id = raw_dest.to_s
     amount = request.amount
-    currency = request.currency.to_s
+    raw_currency = request.currency.to_s
+    currency = raw_currency.strip.empty? ? '' : normalize_currency(raw_currency)
     external_transaction_id = request.external_transaction_id.to_s
     idempotency_key = request.idempotency_key.to_s
     correlation_id = request.correlation_id.to_s
@@ -86,7 +87,7 @@ class LedgerService < Rails::Ledger::V1::LedgerService::Service
     organization_id = request.organization_id
     environment = proto_env_to_string(request.environment)
     external_account_id = request.external_account_id
-    currency = request.currency
+    currency = normalize_currency(request.currency.to_s)
 
     Rails.logger.info "[LEDGER_GRPC] get_account_balance START org=#{organization_id} env=#{environment} account=#{external_account_id} currency=#{currency}"
 
@@ -120,7 +121,7 @@ class LedgerService < Rails::Ledger::V1::LedgerService::Service
     environment = proto_env_to_string(request.environment)
     from_external_account_id = request.from_external_account_id
     to_external_account_id = request.to_external_account_id
-    currency = request.currency
+    currency = normalize_currency(request.currency.to_s)
 
     Rails.logger.info "[LEDGER_GRPC] get_account_balances START org=#{organization_id} env=#{environment} from=#{from_external_account_id} to=#{to_external_account_id} currency=#{currency}"
 
@@ -165,6 +166,13 @@ class LedgerService < Rails::Ledger::V1::LedgerService::Service
   end
 
   private
+
+  def normalize_currency(raw_currency)
+    normalized = raw_currency.strip.upcase
+    return Rails.configuration.x.default_currency if normalized.empty?
+
+    normalized
+  end
 
   def proto_env_to_string(proto_env)
     # Ruby protobuf enum fields can come through as Symbols (e.g. :SANDBOX)
