@@ -23,9 +23,11 @@ type ApiResult<T> = Result<(StatusCode, Json<T>), ApiError>;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ErrorResponse {
-    status: &'static str,
-    code: &'static str,
+    status: u16,
     message: String,
+    #[serde(rename = "correlationId")]
+    correlation_id: String,
+    timestamp: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -514,15 +516,16 @@ fn map_tonic_validation_error(status: tonic::Status) -> (StatusCode, Json<ErrorR
 
 fn api_error(
     status: StatusCode,
-    code: &'static str,
+    _code: &'static str,
     message: impl Into<String>,
 ) -> (StatusCode, Json<ErrorResponse>) {
     (
         status,
         Json(ErrorResponse {
-            status: "error",
-            code,
+            status: status.as_u16(),
             message: message.into(),
+            correlation_id: Uuid::new_v4().to_string(),
+            timestamp: Utc::now().to_rfc3339(),
         }),
     )
 }

@@ -93,7 +93,7 @@ class ApiLedgerEntriesTest < ActionDispatch::IntegrationTest
       get "/api/v1/ledger/entries",
           headers: { "Authorization" => "Bearer #{@token}", "X-Environment" => "sandbox" }
       assert_response :unauthorized
-      assert_equal "Authentication failed", JSON.parse(response.body)["error"]
+      assert_equal "Authentication failed", JSON.parse(response.body)["message"]
     end
   end
 
@@ -106,14 +106,14 @@ class ApiLedgerEntriesTest < ActionDispatch::IntegrationTest
     get "/api/v1/ledger/entries",
         headers: { "Authorization" => "Bearer #{token}", "X-Environment" => "sandbox" }
     assert_response :unauthorized
-    assert_match(/expired/i, JSON.parse(response.body)["error"])
+    assert_match(/expired/i, JSON.parse(response.body)["message"])
   end
 
   test "entries index rejects malformed jwt with decode error" do
     get "/api/v1/ledger/entries",
         headers: { "Authorization" => "Bearer not-a-jwt", "X-Environment" => "sandbox" }
     assert_response :unauthorized
-    assert_match(/Invalid token/i, JSON.parse(response.body)["error"])
+    assert_match(/Invalid token/i, JSON.parse(response.body)["message"])
   end
 
   test "entries index rejects jwt missing business_id" do
@@ -125,6 +125,10 @@ class ApiLedgerEntriesTest < ActionDispatch::IntegrationTest
     get "/api/v1/ledger/entries",
         headers: { "Authorization" => "Bearer #{token}", "X-Environment" => "sandbox" }
     assert_response :unauthorized
-    assert_match(/missing business_id/i, JSON.parse(response.body)["error"])
+    body = JSON.parse(response.body)
+    assert_equal 401, body["status"]
+    assert_match(/missing business_id/i, body["message"])
+    assert body["correlationId"].present?
+    assert body["timestamp"].present?
   end
 end
