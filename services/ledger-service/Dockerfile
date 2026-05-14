@@ -5,7 +5,7 @@
 
 # Make sure RUBY_VERSION matches the Ruby version in .ruby-version and Gemfile
 ARG RUBY_VERSION=3.3.0
-FROM ruby:$RUBY_VERSION-slim as base
+FROM ruby:$RUBY_VERSION-slim AS base
 
 # Rails app lives here
 WORKDIR /rails
@@ -18,14 +18,14 @@ ENV RAILS_ENV="production" \
 
 
 # Throw-away build stage to reduce size of final image
-FROM base as build
+FROM base AS build
 
 # Install packages needed to build gems (bookworm pins; libvips-dev for ruby-vips native build)
 RUN apt-get update -qq && \
     apt-get install --no-install-recommends -y \
     build-essential=12.9 \
     git=1:2.39.5-0+deb12u3 \
-    libpq-dev=15.16-0+deb12u1 \
+    libpq-dev=15.18-0+deb12u1 \
     libvips-dev=8.14.1-3+deb12u2 \
     pkg-config=1.8.1-1 \
     && rm -rf /var/lib/apt/lists/*
