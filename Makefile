@@ -54,4 +54,5 @@ dev: bootstrap
 	@echo "Starting Docker Compose in the background (first run may compile Rust/Ruby for many minutes)."
 	@echo "Containers will restart on failure; gateway starts after app healthchecks pass."
 	@cd "$(REPO_ROOT)" && docker compose --env-file .env up -d --build
+	@cd "$(REPO_ROOT)" && docker compose --env-file .env restart gateway >/dev/null
 	@RAILS_CORE_ROOT="$(REPO_ROOT)" python3 "$(RAILS_CORE)scripts/lib/wait_for_stack.py"
