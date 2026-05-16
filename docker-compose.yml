@@ -113,7 +113,7 @@ services:
     restart: unless-stopped
     working_dir: /app
     volumes:
-      - ./ledger-service:/app
+      - ./services/ledger-service:/app
     environment:
       DATABASE_URL: ${LEDGER_DATABASE_URL}
       RAILS_ENV: development
