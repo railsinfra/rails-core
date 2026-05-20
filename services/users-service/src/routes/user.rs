@@ -148,6 +148,7 @@ pub async fn create_sdk_user(
     const ACTION: &str = "users.sdk.user.create";
     let business_id = ctx.business_id;
     let api_key_id = ctx.api_key_id;
+    let environment = ctx.environment.clone();
     let analytics_distinct_id = normalize_email(&payload.email);
     spawn_capture_event(
         "sdk_user_creation_attempted",
@@ -174,6 +175,7 @@ pub async fn create_sdk_user(
                 &state.grpc,
                 &headers,
                 &peer,
+                Some(&environment),
                 "POST",
                 PATH,
                 ACTION,
@@ -209,6 +211,7 @@ pub async fn create_sdk_user(
                 &state.grpc,
                 &headers,
                 &peer,
+                Some(&environment),
                 "POST",
                 PATH,
                 ACTION,

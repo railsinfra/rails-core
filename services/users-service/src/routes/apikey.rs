@@ -121,6 +121,7 @@ pub async fn create_api_key(
     Json(payload): Json<CreateApiKeyRequest>,
 ) -> Result<Json<CreateApiKeyResponse>, AppError> {
     let path = "/api/v1/api-keys";
+    let environment = ctx.environment.clone();
     let mut meta = HashMap::new();
     match create_api_key_inner(state.clone(), ctx, Json(payload)).await {
         Ok((body, bid, uid)) => {
@@ -128,6 +129,7 @@ pub async fn create_api_key(
                 &state.grpc,
                 &headers,
                 &peer,
+                Some(&environment),
                 "POST",
                 path,
                 "users.api_key.create",
@@ -153,6 +155,7 @@ pub async fn create_api_key(
                 &state.grpc,
                 &headers,
                 &peer,
+                Some(&environment),
                 "POST",
                 path,
                 "users.api_key.create",
@@ -274,6 +277,7 @@ pub async fn revoke_api_key(
     Path(api_key_id): Path<Uuid>,
 ) -> Result<Json<CreateApiKeyResponse>, AppError> {
     let path = format!("/api/v1/api-keys/{api_key_id}/revoke");
+    let environment = ctx.environment.clone();
     let mut meta = HashMap::new();
     match revoke_api_key_inner(state.clone(), ctx, Path(api_key_id)).await {
         Ok((body, bid, uid)) => {
@@ -281,6 +285,7 @@ pub async fn revoke_api_key(
                 &state.grpc,
                 &headers,
                 &peer,
+                Some(&environment),
                 "POST",
                 &path,
                 "users.api_key.revoke",
@@ -306,6 +311,7 @@ pub async fn revoke_api_key(
                 &state.grpc,
                 &headers,
                 &peer,
+                Some(&environment),
                 "POST",
                 &path,
                 "users.api_key.revoke",

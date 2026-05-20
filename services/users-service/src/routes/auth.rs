@@ -76,7 +76,7 @@ use uuid::Uuid;
 async fn login_inner(
     state: AppState,
     Json(payload): Json<LoginRequest>,
-) -> Result<(LoginResponse, Uuid, Uuid), AppError> {
+) -> Result<(LoginResponse, Uuid, Uuid, String), AppError> {
     let email_normalized = user::normalize_email(&payload.email);
     // Optimized: Get active users with their environment_ids and business_id in one query
     let user_rows = sqlx::query(
@@ -164,6 +164,11 @@ async fn login_inner(
     } else {
         available_envs[0].id
     };
+    let selected_environment = available_envs
+        .iter()
+        .find(|e| e.id == selected_environment_id)
+        .map(|e| e.r#type.clone())
+        .unwrap_or_else(|| "sandbox".to_string());
 
     // Find user in the selected environment
     let user_id = user_rows
@@ -233,6 +238,7 @@ async fn login_inner(
         },
         user_id,
         business_id,
+        selected_environment,
     ))
 }
 
@@ -245,11 +251,12 @@ pub async fn login(
     let path = "/api/v1/auth/login";
     let mut meta = HashMap::new();
     match login_inner(state.clone(), Json(payload)).await {
-        Ok((lr, uid, bid)) => {
+        Ok((lr, uid, bid, environment)) => {
             audit_emit::emit_users_mutation(
                 &state.grpc,
                 &headers,
                 &peer,
+                Some(&environment),
                 "POST",
                 path,
                 "users.auth.login",
@@ -275,6 +282,7 @@ pub async fn login(
                 &state.grpc,
                 &headers,
                 &peer,
+                Some("sandbox"),
                 "POST",
                 path,
                 "users.auth.login",
@@ -297,7 +305,7 @@ pub async fn login(
 async fn refresh_token_inner(
     state: AppState,
     Json(payload): Json<RefreshTokenRequest>,
-) -> Result<(RefreshTokenResponse, Uuid, Uuid), AppError> {
+) -> Result<(RefreshTokenResponse, Uuid, Uuid, String), AppError> {
     // 1. Find session by refresh token
     let rec = sqlx::query(
         "SELECT id, user_id, environment_id, jwt_id, status, expires_at FROM user_sessions WHERE refresh_token = $1"
@@ -318,13 +326,17 @@ async fn refresh_token_inner(
     }
 
     // Get business_id for JWT
-    let business_row = sqlx::query("SELECT business_id FROM users WHERE id = $1")
+    let business_row = sqlx::query(
+        "SELECT u.business_id, e.type AS environment FROM users u JOIN environments e ON e.id = $2 AND e.business_id = u.business_id WHERE u.id = $1",
+    )
         .bind(&user_id)
+        .bind(&environment_id)
         .fetch_optional(&state.db)
         .await
         .map_err(|_| AppError::Internal)?
         .ok_or(AppError::Internal)?;
     let business_id: Uuid = business_row.get("business_id");
+    let environment: String = business_row.get("environment");
 
     // 2. Issue new JWT
     let jwt_id = Uuid::new_v4().to_string();
@@ -386,6 +398,7 @@ async fn refresh_token_inner(
         },
         user_id,
         business_id,
+        environment,
     ))
 }
 
@@ -398,11 +411,12 @@ pub async fn refresh_token(
     let path = "/api/v1/auth/refresh";
     let mut meta = HashMap::new();
     match refresh_token_inner(state.clone(), Json(payload)).await {
-        Ok((body, uid, bid)) => {
+        Ok((body, uid, bid, environment)) => {
             audit_emit::emit_users_mutation(
                 &state.grpc,
                 &headers,
                 &peer,
+                Some(&environment),
                 "POST",
                 path,
                 "users.auth.refresh",
@@ -428,6 +442,7 @@ pub async fn refresh_token(
                 &state.grpc,
                 &headers,
                 &peer,
+                Some("sandbox"),
                 "POST",
                 path,
                 "users.auth.refresh",
@@ -450,10 +465,10 @@ pub async fn refresh_token(
 async fn revoke_token_inner(
     state: AppState,
     Json(payload): Json<RevokeTokenRequest>,
-) -> Result<(RevokeTokenResponse, Uuid, Uuid), AppError> {
+) -> Result<(RevokeTokenResponse, Uuid, Uuid, String), AppError> {
     let now = Utc::now();
     let row = sqlx::query(
-        "SELECT s.user_id, u.business_id FROM user_sessions s JOIN users u ON u.id = s.user_id WHERE s.refresh_token = $1 AND s.status = 'active'",
+        "SELECT s.user_id, u.business_id, e.type AS environment FROM user_sessions s JOIN users u ON u.id = s.user_id JOIN environments e ON e.id = s.environment_id AND e.business_id = u.business_id WHERE s.refresh_token = $1 AND s.status = 'active'",
     )
     .bind(&payload.refresh_token)
     .fetch_optional(&state.db)
@@ -463,6 +478,7 @@ async fn revoke_token_inner(
         row.ok_or_else(|| AppError::BadRequest("Token not found or already revoked".to_string()))?;
     let user_id: Uuid = row.get("user_id");
     let business_id: Uuid = row.get("business_id");
+    let environment: String = row.get("environment");
 
     let result = sqlx::query(
         "UPDATE user_sessions SET status = 'revoked', revoked_at = $1 WHERE refresh_token = $2 AND status = 'active'",
@@ -483,6 +499,7 @@ async fn revoke_token_inner(
         },
         user_id,
         business_id,
+        environment,
     ))
 }
 
@@ -495,11 +512,12 @@ pub async fn revoke_token(
     let path = "/api/v1/auth/revoke";
     let mut meta = HashMap::new();
     match revoke_token_inner(state.clone(), Json(payload)).await {
-        Ok((body, uid, bid)) => {
+        Ok((body, uid, bid, environment)) => {
             audit_emit::emit_users_mutation(
                 &state.grpc,
                 &headers,
                 &peer,
+                Some(&environment),
                 "POST",
                 path,
                 "users.auth.revoke",
@@ -526,6 +544,7 @@ pub async fn revoke_token(
                 &state.grpc,
                 &headers,
                 &peer,
+                Some("sandbox"),
                 "POST",
                 path,
                 "users.auth.revoke",

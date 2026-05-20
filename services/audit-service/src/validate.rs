@@ -26,6 +26,7 @@ pub const ALL_ACTIONS: &[&str] = &[
     "users.password_reset.request",
     "users.password_reset.complete",
     "users.beta.apply",
+    "users.sdk.user.create",
     "users.api_key.create",
     "users.api_key.revoke",
     "accounts.account.create",
@@ -43,6 +44,7 @@ pub const METADATA_KEYS_ALLOWED: &[&str] = &[
     "http_status",
     "error_code",
     "idempotency_key_present",
+    "api_key_id",
 ];
 
 const NIL_UUID: &str = "00000000-0000-0000-0000-000000000000";
@@ -122,8 +124,11 @@ fn validate_org_and_action(event: &AuditEvent) -> Result<(), Status> {
 }
 
 fn validate_environment_and_correlation(event: &AuditEvent) -> Result<(), Status> {
-    if event.environment.trim().is_empty() {
-        return Err(Status::invalid_argument("environment is required"));
+    let environment = event.environment.trim();
+    if !matches!(environment, "sandbox" | "production") {
+        return Err(Status::invalid_argument(
+            "environment must be one of: sandbox, production",
+        ));
     }
 
     if event.correlation_id.trim().is_empty() {
@@ -223,7 +228,7 @@ mod tests {
             schema_version: 1,
             source_service: "users".into(),
             organization_id: NIL_UUID.into(),
-            environment: "unknown".into(),
+            environment: "sandbox".into(),
             actor: Some(Actor {
                 r#type: ActorType::Anonymous as i32,
                 id: String::default(),
@@ -272,6 +277,24 @@ mod tests {
         let mut e = base_event();
         e.action = "users.api_key.create".into();
         assert!(validate_audit_event(&e).is_err());
+    }
+
+    #[test]
+    fn rejects_unknown_environment() {
+        let mut e = base_event();
+        e.environment = "unknown".into();
+        assert!(validate_audit_event(&e).is_err());
+    }
+
+    #[test]
+    fn accepts_sdk_user_create_action_and_metadata() {
+        let mut e = base_event();
+        e.organization_id = Uuid::new_v4().to_string();
+        e.action = "users.sdk.user.create".into();
+        e.target.as_mut().expect("target").id = Uuid::new_v4().to_string();
+        e.metadata
+            .insert("api_key_id".into(), Uuid::new_v4().to_string());
+        validate_audit_event(&e).expect("ok");
     }
 
     #[test]
