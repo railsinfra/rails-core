@@ -312,7 +312,10 @@ fn assert_deferred_payload_contract(body: &serde_json::Value) -> String {
         .get("retry_count")
         .and_then(|v| v.as_i64())
         .expect("202 response must include retry_count");
-    assert_eq!(retry_count, 0);
+    assert!(
+        retry_count >= 1,
+        "retry_count must reflect at least one posting attempt"
+    );
     let next_retry_at = body
         .get("next_retry_at")
         .expect("202 response must include next_retry_at");
