@@ -63,6 +63,19 @@ Background sweep must:
 - Return `202` when operation is accepted but side effect is deferred/retrying.
 - Include transaction/operation identifiers so callers can track state.
 
+### Canonical `202` payload for money mutations
+
+When deposit/withdraw/transfer returns `202`, include these top-level fields:
+
+- `transaction_id` (UUID)
+- `status` (`pending` while deferred)
+- `retry_count` (integer)
+- `next_retry_at` (RFC3339 timestamp or `null`)
+
+This is additive to the existing mutation response body (`account`/`transaction`, or
+`from_account`/`to_account`/`transaction`) and gives clients a stable contract for
+polling and UX updates.
+
 ## Required Tests (TDD)
 
 - Write tests first for each reliability behavior.
