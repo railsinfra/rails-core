@@ -23,11 +23,11 @@ FROM base AS build
 # Install packages needed to build gems (bookworm pins; libvips-dev for ruby-vips native build)
 RUN apt-get update -qq && \
     apt-get install --no-install-recommends -y \
-    build-essential=12.9 \
-    git=1:2.39.5-0+deb12u3 \
-    libpq-dev=15.18-0+deb12u1 \
-    libvips-dev=8.14.1-3+deb12u2 \
-    pkg-config=1.8.1-1 \
+    build-essential \
+    git \
+    libpq-dev \
+    libvips-dev \
+    pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 # Install application gems
@@ -45,9 +45,9 @@ FROM base
 # Install packages needed for deployment (libvips42 satisfies ruby-vips at runtime)
 RUN apt-get update -qq && \
     apt-get install --no-install-recommends -y \
-    curl=7.88.1-10+deb12u14 \
-    libvips42=8.14.1-3+deb12u2 \
-    postgresql-client=15+248+deb12u1 \
+    curl \
+    libvips42 \
+    postgresql-client \
     && rm -rf /var/lib/apt/lists /var/cache/apt/archives
 
 # Copy built artifacts: gems, application
