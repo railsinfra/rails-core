@@ -10,7 +10,10 @@ use accounts_api::grpc::ledger_proto::{
     GetAccountBalancesResponse, PostTransactionRequest, PostTransactionResponse,
 };
 use accounts_api::ledger_grpc::LedgerGrpc;
+use accounts_api::models::TransactionStatus;
+use accounts_api::repositories::TransactionRepository;
 use accounts_api::routes::create_router;
+use accounts_api::services::transaction_retry::process_claimed_ledger_posts;
 use accounts_api::users_grpc::users_proto::users_service_server::{
     UsersService, UsersServiceServer,
 };
@@ -20,6 +23,7 @@ use accounts_api::users_grpc::users_proto::{
 };
 
 use axum::serve;
+use chrono::Duration;
 use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -265,14 +269,14 @@ async fn http_post_json(
     status
 }
 
-async fn http_post_json_expect_status(
+async fn http_post_json_expect_status_with_body(
     client: &reqwest::Client,
     base_url: &str,
     path: &str,
     idem: &str,
     body: serde_json::Value,
     expected_status: u16,
-) -> u16 {
+) -> serde_json::Value {
     let url = format!("{base_url}{path}");
     let resp = client
         .post(url)
@@ -284,11 +288,48 @@ async fn http_post_json_expect_status(
         .await
         .expect("http request");
     let status = resp.status().as_u16();
+    let response_body: serde_json::Value = resp.json().await.expect("response json body");
     if status != expected_status {
-        let text = resp.text().await.unwrap_or_default();
-        panic!("unexpected status={status} expected={expected_status} url={path} body={text}");
+        panic!(
+            "unexpected status={status} expected={expected_status} url={path} body={response_body}"
+        );
     }
-    status
+    response_body
+}
+
+fn assert_deferred_payload_contract(body: &serde_json::Value) -> String {
+    let transaction_id = body
+        .get("transaction_id")
+        .and_then(|v| v.as_str())
+        .expect("202 response must include transaction_id")
+        .to_string();
+    let status = body
+        .get("status")
+        .and_then(|v| v.as_str())
+        .expect("202 response must include status");
+    assert_eq!(status, "pending");
+    let retry_count = body
+        .get("retry_count")
+        .and_then(|v| v.as_i64())
+        .expect("202 response must include retry_count");
+    assert_eq!(retry_count, 0);
+    let next_retry_at = body
+        .get("next_retry_at")
+        .expect("202 response must include next_retry_at");
+    assert!(
+        next_retry_at.is_null() || next_retry_at.as_str().is_some(),
+        "next_retry_at must be null or an ISO timestamp"
+    );
+    let nested_transaction_id = body
+        .get("transaction")
+        .and_then(|tx| tx.get("id"))
+        .and_then(|v| v.as_str())
+        .expect("response must include transaction.id");
+    assert_eq!(
+        transaction_id, nested_transaction_id,
+        "top-level transaction_id must match transaction.id"
+    );
+    transaction_id
 }
 
 #[tokio::test]
@@ -679,7 +720,7 @@ async fn deposit_returns_202_when_ledger_post_is_deferred() {
 
     let base_url = format!("http://{addr}");
     let client = reqwest::Client::new();
-    let status = http_post_json_expect_status(
+    let body = http_post_json_expect_status_with_body(
         &client,
         &base_url,
         &format!("/api/v1/accounts/{account_id}/deposit"),
@@ -688,7 +729,299 @@ async fn deposit_returns_202_when_ledger_post_is_deferred() {
         202,
     )
     .await;
-    assert_eq!(status, 202);
+    let _tx_id = assert_deferred_payload_contract(&body);
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn withdraw_returns_202_with_deferred_tracking_fields() {
+    let (_c, pool) = migrated_accounts_pool().await;
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let account_id = insert_active_account(&pool, org, "sandbox", user, "1000000000000011").await;
+
+    let users_url = spawn_users_server().await;
+    let ledger_url = spawn_ledger_failing_post_server().await;
+    let audit_hits = Arc::new(AtomicUsize::new(0));
+    let audit_url = spawn_audit_server(audit_hits).await;
+
+    let users_grpc = accounts_api::users_grpc::UsersGrpc::connect_lazy(&users_url).unwrap();
+    let ledger_grpc = LedgerGrpc::new(ledger_url);
+    let audit_client = audit_channel(&audit_url);
+    let app = create_router(pool, ledger_grpc, users_grpc, audit_client);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+
+    let base_url = format!("http://{addr}");
+    let client = reqwest::Client::new();
+    let body = http_post_json_expect_status_with_body(
+        &client,
+        &base_url,
+        &format!("/api/v1/accounts/{account_id}/withdraw"),
+        "idem-withdraw-202",
+        json!({"amount": 1000}),
+        202,
+    )
+    .await;
+    let _tx_id = assert_deferred_payload_contract(&body);
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn transfer_returns_202_with_deferred_tracking_fields() {
+    let (_c, pool) = migrated_accounts_pool().await;
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let from_id = insert_active_account(&pool, org, "sandbox", user, "1000000000000012").await;
+    let to_id = insert_active_account(&pool, org, "sandbox", user, "1000000000000013").await;
+
+    let users_url = spawn_users_server().await;
+    let ledger_url = spawn_ledger_failing_post_server().await;
+    let audit_hits = Arc::new(AtomicUsize::new(0));
+    let audit_url = spawn_audit_server(audit_hits).await;
+
+    let users_grpc = accounts_api::users_grpc::UsersGrpc::connect_lazy(&users_url).unwrap();
+    let ledger_grpc = LedgerGrpc::new(ledger_url);
+    let audit_client = audit_channel(&audit_url);
+    let app = create_router(pool, ledger_grpc, users_grpc, audit_client);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+
+    let base_url = format!("http://{addr}");
+    let client = reqwest::Client::new();
+    let body = http_post_json_expect_status_with_body(
+        &client,
+        &base_url,
+        &format!("/api/v1/accounts/{from_id}/transfer"),
+        "idem-transfer-202",
+        json!({"to_account_id": to_id, "amount": 1000}),
+        202,
+    )
+    .await;
+    let _tx_id = assert_deferred_payload_contract(&body);
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn deferred_mutations_keep_idempotency_stable() {
+    let (_c, pool) = migrated_accounts_pool().await;
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let from_id = insert_active_account(&pool, org, "sandbox", user, "1000000000000014").await;
+    let to_id = insert_active_account(&pool, org, "sandbox", user, "1000000000000015").await;
+
+    let users_url = spawn_users_server().await;
+    let ledger_url = spawn_ledger_failing_post_server().await;
+    let audit_hits = Arc::new(AtomicUsize::new(0));
+    let audit_url = spawn_audit_server(audit_hits).await;
+
+    let users_grpc = accounts_api::users_grpc::UsersGrpc::connect_lazy(&users_url).unwrap();
+    let ledger_grpc = LedgerGrpc::new(ledger_url);
+    let audit_client = audit_channel(&audit_url);
+    let app = create_router(pool.clone(), ledger_grpc, users_grpc, audit_client);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+
+    let base_url = format!("http://{addr}");
+    let client = reqwest::Client::new();
+
+    let deposit_first = http_post_json_expect_status_with_body(
+        &client,
+        &base_url,
+        &format!("/api/v1/accounts/{from_id}/deposit"),
+        "idem-deposit-stable",
+        json!({"amount": 1000}),
+        202,
+    )
+    .await;
+    let deposit_second = http_post_json_expect_status_with_body(
+        &client,
+        &base_url,
+        &format!("/api/v1/accounts/{from_id}/deposit"),
+        "idem-deposit-stable",
+        json!({"amount": 1000}),
+        202,
+    )
+    .await;
+    let deposit_tx_1 = assert_deferred_payload_contract(&deposit_first);
+    let deposit_tx_2 = assert_deferred_payload_contract(&deposit_second);
+    assert_eq!(deposit_tx_1, deposit_tx_2);
+    let deposit_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM transactions WHERE idempotency_key = $1 AND environment = 'sandbox'",
+    )
+    .bind("idem-deposit-stable")
+    .fetch_one(&pool)
+    .await
+    .expect("count deposit idempotency rows");
+    assert_eq!(deposit_count, 1);
+
+    let withdraw_first = http_post_json_expect_status_with_body(
+        &client,
+        &base_url,
+        &format!("/api/v1/accounts/{from_id}/withdraw"),
+        "idem-withdraw-stable",
+        json!({"amount": 1000}),
+        202,
+    )
+    .await;
+    let withdraw_second = http_post_json_expect_status_with_body(
+        &client,
+        &base_url,
+        &format!("/api/v1/accounts/{from_id}/withdraw"),
+        "idem-withdraw-stable",
+        json!({"amount": 1000}),
+        202,
+    )
+    .await;
+    let withdraw_tx_1 = assert_deferred_payload_contract(&withdraw_first);
+    let withdraw_tx_2 = assert_deferred_payload_contract(&withdraw_second);
+    assert_eq!(withdraw_tx_1, withdraw_tx_2);
+    let withdraw_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM transactions WHERE idempotency_key = $1 AND environment = 'sandbox'",
+    )
+    .bind("idem-withdraw-stable")
+    .fetch_one(&pool)
+    .await
+    .expect("count withdraw idempotency rows");
+    assert_eq!(withdraw_count, 1);
+
+    let transfer_first = http_post_json_expect_status_with_body(
+        &client,
+        &base_url,
+        &format!("/api/v1/accounts/{from_id}/transfer"),
+        "idem-transfer-stable",
+        json!({"to_account_id": to_id, "amount": 1000}),
+        202,
+    )
+    .await;
+    let transfer_second = http_post_json_expect_status_with_body(
+        &client,
+        &base_url,
+        &format!("/api/v1/accounts/{from_id}/transfer"),
+        "idem-transfer-stable",
+        json!({"to_account_id": to_id, "amount": 1000}),
+        202,
+    )
+    .await;
+    let transfer_tx_1 = assert_deferred_payload_contract(&transfer_first);
+    let transfer_tx_2 = assert_deferred_payload_contract(&transfer_second);
+    assert_eq!(transfer_tx_1, transfer_tx_2);
+    let transfer_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM transactions WHERE idempotency_key = $1 AND environment = 'sandbox'",
+    )
+    .bind("idem-transfer-stable")
+    .fetch_one(&pool)
+    .await
+    .expect("count transfer idempotency rows");
+    assert_eq!(transfer_count, 1);
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn e2e_deferred_deposit_eventually_posts_after_retry_worker_processes_it() {
+    let (_c, pool) = migrated_accounts_pool().await;
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let account_id = insert_active_account(&pool, org, "sandbox", user, "1000000000000016").await;
+
+    let users_url = spawn_users_server().await;
+    let failing_ledger_url = spawn_ledger_failing_post_server().await;
+    let audit_hits = Arc::new(AtomicUsize::new(0));
+    let audit_url = spawn_audit_server(audit_hits).await;
+
+    let users_grpc = accounts_api::users_grpc::UsersGrpc::connect_lazy(&users_url).unwrap();
+    let ledger_grpc = LedgerGrpc::new(failing_ledger_url);
+    let audit_client = audit_channel(&audit_url);
+    let app = create_router(pool.clone(), ledger_grpc, users_grpc, audit_client);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+
+    let base_url = format!("http://{addr}");
+    let client = reqwest::Client::new();
+    let deferred = http_post_json_expect_status_with_body(
+        &client,
+        &base_url,
+        &format!("/api/v1/accounts/{account_id}/deposit"),
+        "idem-deposit-e2e",
+        json!({"amount": 1000}),
+        202,
+    )
+    .await;
+    let deferred_tx_id = assert_deferred_payload_contract(&deferred);
+    let tx_uuid = Uuid::parse_str(&deferred_tx_id).expect("deferred transaction id should be uuid");
+
+    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+
+    let success_ledger_url = spawn_ledger_server().await;
+    let success_ledger_grpc = LedgerGrpc::new(success_ledger_url);
+    let claimed = TransactionRepository::claim_pending_transactions_for_ledger_post(
+        &pool,
+        Duration::seconds(1),
+        Duration::seconds(600),
+        Some(20),
+        Some("sandbox"),
+    )
+    .await
+    .expect("claim pending rows for retry");
+    process_claimed_ledger_posts(&pool, &success_ledger_grpc, claimed).await;
+
+    let updated = TransactionRepository::find_by_id(&pool, tx_uuid)
+        .await
+        .expect("fetch updated transaction");
+    assert_eq!(updated.status, TransactionStatus::Posted);
+
+    let final_resp = client
+        .get(format!("{base_url}/api/v1/transactions/{deferred_tx_id}"))
+        .header("x-environment", "sandbox")
+        .send()
+        .await
+        .expect("fetch finalized transaction");
+    assert_eq!(final_resp.status().as_u16(), 200);
+    let final_body: serde_json::Value = final_resp.json().await.expect("final json");
+    assert_eq!(
+        final_body.get("status").and_then(|v| v.as_str()),
+        Some("completed")
+    );
 
     server.abort();
 }

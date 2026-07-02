@@ -109,6 +109,28 @@ fn mutation_http_status(status: TransactionStatus) -> StatusCode {
     }
 }
 
+fn append_deferred_tracking_fields(
+    response: &mut serde_json::Value,
+    transaction: &crate::models::Transaction,
+    status: &str,
+) {
+    if let serde_json::Value::Object(map) = response {
+        map.insert(
+            "transaction_id".to_string(),
+            serde_json::json!(transaction.id),
+        );
+        map.insert("status".to_string(), serde_json::json!(status));
+        map.insert(
+            "retry_count".to_string(),
+            serde_json::json!(transaction.retry_count),
+        );
+        map.insert(
+            "next_retry_at".to_string(),
+            serde_json::json!(transaction.next_retry_at),
+        );
+    }
+}
+
 fn spawn_audit_emit(
     audit_client: Option<AuditServiceClient<Channel>>,
     headers: HeaderMap,
@@ -657,13 +679,16 @@ pub async fn deposit(
 
     let txn_resp =
         AccountTransactionResponse::for_mutation_response(&transaction, account_resp.balance);
-    Ok((
-        mutation_http_status(transaction.status),
-        Json(serde_json::json!({
-            "account": account_resp,
-            "transaction": txn_resp
-        })),
-    ))
+    let status_code = mutation_http_status(transaction.status);
+    let response_status = txn_resp.status.clone();
+    let mut response = serde_json::json!({
+        "account": account_resp,
+        "transaction": txn_resp
+    });
+    if status_code == StatusCode::ACCEPTED {
+        append_deferred_tracking_fields(&mut response, &transaction, &response_status);
+    }
+    Ok((status_code, Json(response)))
 }
 
 pub async fn withdraw(
@@ -781,13 +806,16 @@ pub async fn withdraw(
 
     let txn_resp =
         AccountTransactionResponse::for_mutation_response(&transaction, account_resp.balance);
-    Ok((
-        mutation_http_status(transaction.status),
-        Json(serde_json::json!({
-            "account": account_resp,
-            "transaction": txn_resp
-        })),
-    ))
+    let status_code = mutation_http_status(transaction.status);
+    let response_status = txn_resp.status.clone();
+    let mut response = serde_json::json!({
+        "account": account_resp,
+        "transaction": txn_resp
+    });
+    if status_code == StatusCode::ACCEPTED {
+        append_deferred_tracking_fields(&mut response, &transaction, &response_status);
+    }
+    Ok((status_code, Json(response)))
 }
 
 pub async fn transfer(
@@ -1006,14 +1034,17 @@ pub async fn transfer(
 
     let txn_resp =
         AccountTransactionResponse::for_mutation_response(&transaction, from_resp.balance);
-    Ok((
-        mutation_http_status(transaction.status),
-        Json(serde_json::json!({
-            "from_account": from_resp,
-            "to_account": to_resp,
-            "transaction": txn_resp
-        })),
-    ))
+    let status_code = mutation_http_status(transaction.status);
+    let response_status = txn_resp.status.clone();
+    let mut response = serde_json::json!({
+        "from_account": from_resp,
+        "to_account": to_resp,
+        "transaction": txn_resp
+    });
+    if status_code == StatusCode::ACCEPTED {
+        append_deferred_tracking_fields(&mut response, &transaction, &response_status);
+    }
+    Ok((status_code, Json(response)))
 }
 
 /// Deserialize amount from JSON number or string (e.g. 10000 or "10000").
