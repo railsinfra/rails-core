@@ -17,10 +17,7 @@ pub struct Settings {
 }
 
 impl Settings {
-    fn validate_grpc_url(
-        env_key: &str,
-        value: String,
-    ) -> Result<String, config::ConfigError> {
+    fn validate_grpc_url(env_key: &str, value: String) -> Result<String, config::ConfigError> {
         let trimmed = value.trim();
         if trimmed.is_empty() {
             return Err(config::ConfigError::Message(format!(
@@ -29,9 +26,8 @@ impl Settings {
             )));
         }
 
-        Endpoint::from_shared(trimmed.to_string()).map_err(|e| {
-            config::ConfigError::Message(format!("invalid {}: {}", env_key, e))
-        })?;
+        Endpoint::from_shared(trimmed.to_string())
+            .map_err(|e| config::ConfigError::Message(format!("invalid {}: {}", env_key, e)))?;
         Ok(trimmed.to_string())
     }
 

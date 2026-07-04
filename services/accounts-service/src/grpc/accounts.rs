@@ -1,9 +1,7 @@
 use tonic::{Request, Response, Status};
 
 use super::proto::{
-    accounts_service_server::AccountsService,
-    GetAccountBalanceRequest,
-    GetAccountBalanceResponse,
+    accounts_service_server::AccountsService, GetAccountBalanceRequest, GetAccountBalanceResponse,
 };
 
 #[derive(Clone)]

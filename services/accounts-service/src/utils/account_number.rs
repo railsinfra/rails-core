@@ -7,7 +7,9 @@ pub(crate) fn clamp_account_number_length(length: usize) -> usize {
 }
 
 /// Build a random numeric account number string of total digit count `length` (including Luhn digit).
-pub(crate) fn random_account_number_with_luhn(length: usize) -> Result<String, crate::errors::AppError> {
+pub(crate) fn random_account_number_with_luhn(
+    length: usize,
+) -> Result<String, crate::errors::AppError> {
     let length = clamp_account_number_length(length);
     let base_length = length - 1;
 
@@ -42,7 +44,7 @@ pub async fn generate_account_number(
             return Ok(account_number);
         }
     }
-    
+
     Err(crate::errors::AppError::Internal(
         "Failed to generate unique account number after multiple attempts".to_string(),
     ))

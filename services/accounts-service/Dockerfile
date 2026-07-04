@@ -23,9 +23,9 @@ RUN mkdir -p ../audit-service/src && \
 ENV SQLX_OFFLINE=true
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config \
-    libssl-dev \
-    protobuf-compiler \
+    pkg-config=2.1 \
+    libssl-dev=3.0.11-1~deb12u1 \
+    protobuf-compiler=3.21.12-3 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY Cargo.toml Cargo.lock ./
@@ -51,8 +51,8 @@ RUN touch src/main.rs && cargo build --release
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
+    ca-certificates=20230311 \
+    curl=7.88.1-10+deb12u5 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

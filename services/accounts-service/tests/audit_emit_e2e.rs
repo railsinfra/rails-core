@@ -32,10 +32,7 @@ async fn start_audit_stack() -> (
         .await
         .expect("start postgres (requires Docker for testcontainers)");
     let host = container.get_host().await.expect("host");
-    let port = container
-        .get_host_port_ipv4(5432)
-        .await
-        .expect("port");
+    let port = container.get_host_port_ipv4(5432).await.expect("port");
     let url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
 
     let pool = PgPoolOptions::new()
@@ -56,12 +53,9 @@ async fn start_audit_stack() -> (
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let serve = Server::builder()
         .add_service(server)
-        .serve_with_incoming_shutdown(
-            TcpListenerStream::new(listener),
-            async {
-                let _ = shutdown_rx.await;
-            },
-        );
+        .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
+            let _ = shutdown_rx.await;
+        });
     let join = tokio::spawn(serve);
     tokio::time::sleep(Duration::from_millis(500)).await;
 

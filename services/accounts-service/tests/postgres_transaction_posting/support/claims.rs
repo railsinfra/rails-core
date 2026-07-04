@@ -3,10 +3,7 @@ use accounts_api::repositories::TransactionRepository;
 use chrono::Duration;
 use sqlx::PgPool;
 
-pub async fn claim_for_processing(
-    pool: &PgPool,
-    environment: Option<&str>,
-) -> Vec<Transaction> {
+pub async fn claim_for_processing(pool: &PgPool, environment: Option<&str>) -> Vec<Transaction> {
     TransactionRepository::claim_pending_transactions_for_ledger_post(
         pool,
         Duration::seconds(1),

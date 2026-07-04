@@ -23,24 +23,32 @@ fn try_connect_ledger_grpc(endpoint: &str, timeout: Duration) -> bool {
         .or_else(|| endpoint.strip_prefix("https://"))
         .unwrap_or(endpoint);
 
-    let host_port = without_scheme
-        .split('/')
-        .next()
-        .unwrap_or(without_scheme);
+    let host_port = without_scheme.split('/').next().unwrap_or(without_scheme);
 
     // Resolve and attempt a TCP connect with timeout (best-effort).
-    if let Ok(mut addrs) = host_port.to_socket_addrs() {
-        if let Some(addr) = addrs.next() {
-            return TcpStream::connect_timeout(&addr, timeout).is_ok();
+    match host_port.to_socket_addrs() {
+        Ok(mut addrs) => {
+            if let Some(addr) = addrs.next() {
+                match TcpStream::connect_timeout(&addr, timeout) {
+                    Ok(_) => true,
+                    Err(e) => {
+                        eprintln!("Failed to connect to ledger gRPC at {}: {}", endpoint, e);
+                        false
+                    }
+                }
+            } else {
+                eprintln!("No socket addresses resolved for ledger gRPC: {}", host_port);
+                false
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to resolve ledger gRPC address {}: {}", host_port, e);
+            false
         }
     }
-
-    false
 }
 
-pub async fn health_check(
-    State(state): State<AppState>,
-) -> (StatusCode, Json<serde_json::Value>) {
+pub async fn health_check(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
     let endpoint = state.ledger_grpc.endpoint().to_string();
     let timeout = state.ledger_grpc.timeout();
     let grpc_ok = try_connect_ledger_grpc(&endpoint, timeout);

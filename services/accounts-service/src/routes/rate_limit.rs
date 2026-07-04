@@ -34,7 +34,10 @@ impl RateLimiter {
         let now = Instant::now();
         let entry = store
             .entry(client_key.to_string())
-            .or_insert(RateLimitWindow { start: now, count: 0 });
+            .or_insert(RateLimitWindow {
+                start: now,
+                count: 0,
+            });
 
         if now.duration_since(entry.start) > self.config.window {
             entry.start = now;
@@ -50,7 +53,10 @@ impl RateLimiter {
     }
 
     pub fn reset(&self) {
-        self.store.lock().expect("rate limiter lock poisoned").clear();
+        self.store
+            .lock()
+            .expect("rate limiter lock poisoned")
+            .clear();
     }
 }
 

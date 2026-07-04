@@ -66,7 +66,9 @@ fn retry_max_delay_ms_from_env() -> u64 {
 pub(crate) fn compute_retry_delay_ms(attempt: i32, base_ms: u64, max_ms: u64) -> u64 {
     let safe_max = max_ms.max(base_ms);
     let exp = (attempt.max(1) - 1).min(16) as u32;
-    base_ms.saturating_mul(2u64.saturating_pow(exp)).min(safe_max)
+    base_ms
+        .saturating_mul(2u64.saturating_pow(exp))
+        .min(safe_max)
 }
 
 /// One retry-worker iteration: claim a batch, post claimed rows, then idle sleep.
@@ -183,7 +185,8 @@ pub async fn process_claimed_ledger_posts(
                         max_attempts,
                         "retry_worker_marking_terminal_failure"
                     );
-                    let _ = TransactionRepository::mark_terminal_failure(pool, tx.id, &reason).await;
+                    let _ =
+                        TransactionRepository::mark_terminal_failure(pool, tx.id, &reason).await;
                 } else {
                     let delay_ms = compute_retry_delay_ms(
                         tx.retry_count,

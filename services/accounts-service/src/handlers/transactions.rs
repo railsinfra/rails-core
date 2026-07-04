@@ -107,12 +107,7 @@ pub async fn list_account_transactions(
         Some(tx) => {
             match state
                 .ledger_grpc
-                .get_account_balance(
-                    tx.organization_id,
-                    &environment,
-                    account_id,
-                    &tx.currency,
-                )
+                .get_account_balance(tx.organization_id, &environment, account_id, &tx.currency)
                 .await
             {
                 Ok(balance) => negate_ledger_balance_for_display(&balance),
@@ -165,14 +160,15 @@ pub async fn list_transactions(
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(10).clamp(1, 100);
 
-    let (transactions, pagination) = TransactionService::get_transactions_by_organization_paginated(
-        &state.pool,
-        organization_id,
-        &environment,
-        page,
-        per_page,
-    )
-    .await?;
+    let (transactions, pagination) =
+        TransactionService::get_transactions_by_organization_paginated(
+            &state.pool,
+            organization_id,
+            &environment,
+            page,
+            per_page,
+        )
+        .await?;
 
     // Compute historical balance_after per transaction (same logic as list_account_transactions).
     // Transactions are newest first; walk backwards from current Ledger balance.
@@ -192,12 +188,7 @@ pub async fn list_transactions(
         }
         let balance = match state
             .ledger_grpc
-            .get_account_balance(
-                organization_id,
-                &environment,
-                *account_id,
-                currency,
-            )
+            .get_account_balance(organization_id, &environment, *account_id, currency)
             .await
         {
             Ok(b) => negate_ledger_balance_for_display(&b),
@@ -239,13 +230,23 @@ pub async fn list_transactions(
         let (from_ba, to_ba) = balance_after_per_tx.get(i).copied().unwrap_or((0, None));
         match tx.transaction_kind {
             crate::models::TransactionKind::Transfer => {
-                data.push(AccountTransactionResponse::from_transaction(tx, tx.from_account_id, from_ba));
+                data.push(AccountTransactionResponse::from_transaction(
+                    tx,
+                    tx.from_account_id,
+                    from_ba,
+                ));
                 if let Some(ba) = to_ba {
-                    data.push(AccountTransactionResponse::from_transaction(tx, tx.to_account_id, ba));
+                    data.push(AccountTransactionResponse::from_transaction(
+                        tx,
+                        tx.to_account_id,
+                        ba,
+                    ));
                 }
             }
             _ => {
-                data.push(AccountTransactionResponse::for_mutation_response(tx, from_ba));
+                data.push(AccountTransactionResponse::for_mutation_response(
+                    tx, from_ba,
+                ));
             }
         }
     }
