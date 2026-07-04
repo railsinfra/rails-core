@@ -23,6 +23,10 @@ async fn try_claim_pending_then_none_when_not_pending() {
         .unwrap()
         .unwrap();
     assert_eq!(claimed.status, TransactionStatus::Posting);
+    assert_eq!(claimed.retry_count, 1);
+    assert!(claimed.last_attempted_at.is_some());
+    assert!(claimed.next_retry_at.is_none());
+    assert!(claimed.terminal_failure_at.is_none());
 
     let second = TransactionRepository::try_claim_pending_for_post(&pool, id)
         .await

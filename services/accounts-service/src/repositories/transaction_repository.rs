@@ -275,10 +275,14 @@ impl TransactionRepository {
         let row = sqlx::query(
             r#"
             UPDATE transactions
-            SET status = 'posting', failure_reason = NULL, updated_at = NOW()
+            SET status = 'posting',
+                failure_reason = NULL,
+                retry_count = COALESCE(retry_count, 0) + 1,
+                last_attempted_at = NOW(),
+                updated_at = NOW()
             WHERE id = $1 AND status = 'pending'
             RETURNING id, organization_id, from_account_id, to_account_id, amount, currency,
-                      transaction_kind, status, failure_reason, idempotency_key, environment, description, external_recipient_id, reference_id, created_at, updated_at
+                      transaction_kind, status, failure_reason, idempotency_key, environment, description, external_recipient_id, reference_id, retry_count, last_attempted_at, next_retry_at, terminal_failure_at, created_at, updated_at
             "#,
         )
         .bind(id)
@@ -428,7 +432,7 @@ impl TransactionRepository {
             SET status = $2, failure_reason = $3, updated_at = NOW()
             WHERE id = $1
             RETURNING id, organization_id, from_account_id, to_account_id, amount, currency,
-                      transaction_kind, status, failure_reason, idempotency_key, environment, description, external_recipient_id, reference_id, created_at, updated_at
+                      transaction_kind, status, failure_reason, idempotency_key, environment, description, external_recipient_id, reference_id, retry_count, last_attempted_at, next_retry_at, terminal_failure_at, created_at, updated_at
             "#,
         )
         .bind(id)

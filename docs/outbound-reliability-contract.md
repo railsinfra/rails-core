@@ -57,6 +57,33 @@ Background sweep must:
 - Finalize old `pending` rows to `failed` based on age/attempt policy.
 - Emit structured logs for `requeued` and `failed` counts.
 
+## Required Metrics & Alerts
+
+Every service adopting this contract must expose outbound reliability metrics and
+wire alerts for sustained failure modes.
+
+Required metrics (names may vary by service stack):
+
+- outbound_post_attempt_total (counter; labeled by dependency and result)
+- outbound_post_success_total (counter)
+- outbound_post_failure_total (counter; labeled by error class)
+- outbound_retry_scheduled_total (counter)
+- outbound_retry_exhausted_total (counter)
+- outbound_reconcile_requeued_total (counter)
+- outbound_reconcile_failed_total (counter)
+- outbound_oldest_pending_age_seconds (gauge)
+- outbound_pending_queue_depth (gauge)
+
+Minimum alerting requirements:
+
+- Page/critical: retry exhaustion rate exceeds service SLO threshold for 10m.
+- Page/critical: oldest pending age exceeds `OUTBOUND_MAX_PENDING_AGE_SECS` for 10m.
+- Warning: reconciliation repeatedly fails for 5+ consecutive runs.
+- Warning: pending queue depth trends upward for 30m without recovery.
+
+Teams should tune threshold values to service SLOs, but these alert classes are
+mandatory.
+
 ## Required API Semantics
 
 - Return `200` only when outbound side effect is confirmed.
@@ -90,6 +117,36 @@ polling and UX updates.
 
 - Coverage gate: 100% line + branch for changed modules.
 - CI must fail below threshold.
+
+## Adoption Checklist (PR-Ready)
+
+Use this checklist in PR descriptions for any new outbound dependency:
+
+- [ ] Startup config validates endpoint shape and required auth values.
+- [ ] Service fails fast on invalid critical outbound config.
+- [ ] Work intent is durably stored before outbound side effect.
+- [ ] Retry metadata fields exist and are written on each attempt.
+- [ ] Retry policy is bounded (max attempts + capped backoff).
+- [ ] Exhausted retries transition to terminal failed state.
+- [ ] Reconciliation loop requeues stale in-flight rows and finalizes aged pending rows.
+- [ ] `200` vs `202` API semantics are implemented and documented for callers.
+- [ ] Required outbound metrics are emitted.
+- [ ] Required alerts are configured and linked in runbook/on-call docs.
+- [ ] TDD coverage includes startup, retry, exhaustion, reconciliation, and API semantics.
+- [ ] Coverage gate enforcement is present in CI for changed modules.
+
+## Adoption Playbook
+
+Follow this sequence when adding outbound dependencies:
+
+1. Model durable work state and retry metadata in storage.
+2. Add startup validation and connectivity probe for critical dependencies.
+3. Implement immediate post attempt and bounded retry scheduling.
+4. Add terminal failure transition for exhaustion/unrecoverable errors.
+5. Add reconciliation sweep for stale `posting` and old `pending` rows.
+6. Implement API status semantics (`200` confirmed, `202` deferred).
+7. Add metrics/alerts and update on-call documentation.
+8. Add/expand tests first, then implement, then verify CI coverage gates.
 
 ## Accounts-Service Reference Implementation
 

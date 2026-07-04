@@ -18,8 +18,22 @@ async fn update_status_can_set_posting() {
     )
     .await;
 
-    let updated = TransactionRepository::update_status(&pool, id, TransactionStatus::Posting, None)
+    let claimed = TransactionRepository::try_claim_pending_for_post(&pool, id)
         .await
+        .unwrap()
         .unwrap();
+    assert_eq!(claimed.retry_count, 1);
+    assert!(claimed.last_attempted_at.is_some());
+
+    let updated = TransactionRepository::update_status(
+        &pool,
+        id,
+        TransactionStatus::Posting,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(updated.status, TransactionStatus::Posting);
+    assert_eq!(updated.retry_count, 1);
+    assert!(updated.last_attempted_at.is_some());
 }
