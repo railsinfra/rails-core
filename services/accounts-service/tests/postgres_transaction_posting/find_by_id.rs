@@ -28,7 +28,9 @@ async fn find_by_id_rejects_invalid_transaction_kind_after_constraint_drop() {
     )
     .await;
 
-    let err = TransactionRepository::find_by_id(&pool, id).await.unwrap_err();
+    let err = TransactionRepository::find_by_id(&pool, id)
+        .await
+        .unwrap_err();
     match err {
         AppError::Internal(msg) => assert!(msg.contains("Invalid transaction kind"), "{msg}"),
         other => panic!("unexpected error: {other:?}"),
@@ -56,7 +58,9 @@ async fn find_by_id_rejects_invalid_transaction_status_after_constraint_drop() {
     )
     .await;
 
-    let err = TransactionRepository::find_by_id(&pool, id).await.unwrap_err();
+    let err = TransactionRepository::find_by_id(&pool, id)
+        .await
+        .unwrap_err();
     match err {
         AppError::Internal(msg) => assert!(msg.contains("Invalid transaction status"), "{msg}"),
         other => panic!("unexpected error: {other:?}"),

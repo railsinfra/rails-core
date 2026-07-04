@@ -18,13 +18,8 @@ async fn update_status_can_set_posting() {
     )
     .await;
 
-    let updated = TransactionRepository::update_status(
-        &pool,
-        id,
-        TransactionStatus::Posting,
-        None,
-    )
-    .await
-    .unwrap();
+    let updated = TransactionRepository::update_status(&pool, id, TransactionStatus::Posting, None)
+        .await
+        .unwrap();
     assert_eq!(updated.status, TransactionStatus::Posting);
 }

@@ -57,9 +57,9 @@ pub async fn run(pool: PgPool) {
 #[cfg(test)]
 mod tests {
     use super::{
-        max_pending_age_secs_from_env, reconcile_interval_secs_from_env, stale_posting_secs_from_env,
-        OUTBOUND_MAX_PENDING_AGE_SECS_ENV, OUTBOUND_RECONCILE_INTERVAL_SECS_ENV,
-        TRANSACTION_POSTING_STALE_AFTER_SECS_ENV,
+        max_pending_age_secs_from_env, reconcile_interval_secs_from_env,
+        stale_posting_secs_from_env, OUTBOUND_MAX_PENDING_AGE_SECS_ENV,
+        OUTBOUND_RECONCILE_INTERVAL_SECS_ENV, TRANSACTION_POSTING_STALE_AFTER_SECS_ENV,
     };
     use std::sync::Mutex;
 
