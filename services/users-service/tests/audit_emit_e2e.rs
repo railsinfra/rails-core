@@ -99,6 +99,7 @@ async fn users_emit_persists_audit_row() {
         &grpc,
         &headers,
         &peer,
+        Some("sandbox"),
         "POST",
         "/api/v1/auth/login",
         "users.auth.login",

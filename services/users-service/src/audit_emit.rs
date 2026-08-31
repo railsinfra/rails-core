@@ -12,21 +12,29 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::grpc::audit_proto::audit_service_client::AuditServiceClient;
+use crate::grpc::audit_proto::ActorType;
 use crate::grpc::audit_proto::{
     Actor, AppendAuditEventRequest, AuditEvent, Outcome, RequestContext, Target,
 };
-use crate::grpc::audit_proto::ActorType;
 use crate::grpc::GrpcClients;
 use tonic::transport::Channel;
 
-pub fn environment_from_headers(headers: &HeaderMap) -> String {
-    headers
+pub fn environment_from_headers(headers: &HeaderMap, resolved_environment: Option<&str>) -> String {
+    let header_environment = headers
         .get("x-environment")
         .or_else(|| headers.get("X-Environment"))
         .and_then(|v| v.to_str().ok())
         .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "unknown".to_string())
+        .filter(|s| !s.is_empty());
+
+    header_environment
+        .or_else(|| {
+            resolved_environment
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "sandbox".to_string())
 }
 
 pub fn correlation_from_headers(headers: &HeaderMap) -> String {
@@ -86,10 +94,7 @@ fn audit_append_deadline() -> Duration {
         .ok()
         .and_then(|s| s.trim().parse::<u64>().ok())
         .filter(|&ms| ms > 0 && ms <= MAX_MS)
-        .map_or_else(
-            || Duration::from_millis(DEFAULT_MS),
-            Duration::from_millis,
-        )
+        .map_or_else(|| Duration::from_millis(DEFAULT_MS), Duration::from_millis)
 }
 
 /// Best-effort audit RPC (`AUDIT_APPEND_TIMEOUT_MS`, default 5s). Logs + Sentry on errors; never affects HTTP status.
@@ -97,6 +102,7 @@ pub async fn emit_users_mutation(
     grpc: &GrpcClients,
     headers: &HeaderMap,
     peer: &SocketAddr,
+    resolved_environment: Option<&str>,
     method: &str,
     path: &str,
     action: &'static str,
@@ -114,10 +120,7 @@ pub async fn emit_users_mutation(
         return;
     };
 
-    let txn = sentry::start_transaction(TransactionContext::new(
-        "users.audit.emit",
-        "audit.emit",
-    ));
+    let txn = sentry::start_transaction(TransactionContext::new("users.audit.emit", "audit.emit"));
     sentry::configure_scope(|scope| {
         scope.set_tag("audit.action", action);
     });
@@ -130,7 +133,7 @@ pub async fn emit_users_mutation(
         schema_version: 1,
         source_service: "users".into(),
         organization_id: organization_id.to_string(),
-        environment: environment_from_headers(headers),
+        environment: environment_from_headers(headers, resolved_environment),
         actor: Some(Actor {
             r#type: actor_type as i32,
             id: actor_id.to_string(),
@@ -196,10 +199,7 @@ pub async fn emit_users_mutation(
                 scope.set_tag("audit.action", action);
                 scope.set_tag("correlation_id", cid.as_str());
             });
-            sentry::capture_message(
-                &format!("audit-append-failure: {e}"),
-                sentry::Level::Error,
-            );
+            sentry::capture_message(&format!("audit-append-failure: {e}"), sentry::Level::Error);
         }
     }
     txn.finish();
@@ -218,11 +218,11 @@ mod tests {
     use super::*;
     use crate::error::AppError;
     use crate::grpc::audit_proto::audit_service_server::{AuditService, AuditServiceServer};
-    use crate::grpc::GrpcClients;
     use crate::grpc::audit_proto::{AppendAuditEventRequest, AppendAuditEventResponse};
+    use crate::grpc::GrpcClients;
     use crate::test_support::global_test_lock;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use tokio::net::TcpListener;
     use tokio_stream::wrappers::TcpListenerStream;
     use tonic::transport::{Endpoint, Server};
@@ -259,15 +259,22 @@ mod tests {
     #[test]
     fn environment_from_headers_prefers_x_environment_case_insensitive() {
         let mut h = HeaderMap::new();
-        assert_eq!(environment_from_headers(&h), "unknown");
+        assert_eq!(environment_from_headers(&h, None), "sandbox");
         h.insert("X-Environment", "production".parse().unwrap());
-        assert_eq!(environment_from_headers(&h), "production");
+        assert_eq!(environment_from_headers(&h, None), "production");
         let mut h2 = HeaderMap::new();
         h2.insert("x-environment", "sandbox".parse().unwrap());
-        assert_eq!(environment_from_headers(&h2), "sandbox");
+        assert_eq!(environment_from_headers(&h2, None), "sandbox");
         let mut h3 = HeaderMap::new();
         h3.insert("x-environment", "   ".parse().unwrap());
-        assert_eq!(environment_from_headers(&h3), "unknown");
+        assert_eq!(
+            environment_from_headers(&h3, Some("production")),
+            "production"
+        );
+        assert_eq!(
+            environment_from_headers(&HeaderMap::new(), Some("production")),
+            "production"
+        );
     }
 
     #[test]
@@ -289,10 +296,7 @@ mod tests {
             http_status_for_error(&AppError::BadRequest("x".into())),
             400
         );
-        assert_eq!(
-            http_status_for_error(&AppError::Conflict("c".into())),
-            409
-        );
+        assert_eq!(http_status_for_error(&AppError::Conflict("c".into())), 409);
         assert_eq!(http_status_for_error(&AppError::Internal), 500);
     }
 
@@ -325,7 +329,10 @@ mod tests {
         assert_eq!(super::audit_append_deadline(), Duration::from_millis(5_000));
 
         std::env::set_var(AUDIT_APPEND_TIMEOUT_MS_ENV, "120000");
-        assert_eq!(super::audit_append_deadline(), Duration::from_millis(120_000));
+        assert_eq!(
+            super::audit_append_deadline(),
+            Duration::from_millis(120_000)
+        );
 
         match saved {
             Some(v) => std::env::set_var(AUDIT_APPEND_TIMEOUT_MS_ENV, v),
@@ -340,9 +347,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let incoming = TcpListenerStream::new(listener);
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-        let svc = CountingAudit {
-            hits: hits.clone(),
-        };
+        let svc = CountingAudit { hits: hits.clone() };
         let server = Server::builder()
             .add_service(AuditServiceServer::new(svc))
             .serve_with_incoming_shutdown(incoming, async {
@@ -366,6 +371,7 @@ mod tests {
             &grpc,
             &headers,
             &peer,
+            Some("sandbox"),
             "POST",
             "/api/v1/auth/login",
             "users.auth.login",
@@ -395,6 +401,7 @@ mod tests {
             &grpc,
             &headers,
             &peer,
+            Some("sandbox"),
             "POST",
             "/x",
             "users.auth.login",
@@ -435,10 +442,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-correlation-id", "cid-grpc-fail".parse().unwrap());
         headers.insert("x-environment", "staging".parse().unwrap());
-        headers.insert(
-            "x-forwarded-for",
-            "203.0.113.1, 10.0.0.1".parse().unwrap(),
-        );
+        headers.insert("x-forwarded-for", "203.0.113.1, 10.0.0.1".parse().unwrap());
         headers.insert(axum::http::header::USER_AGENT, "TestUA/1".parse().unwrap());
         let peer = SocketAddr::from(([10, 0, 0, 2], 443));
 
@@ -446,6 +450,7 @@ mod tests {
             &grpc,
             &headers,
             &peer,
+            Some("sandbox"),
             "POST",
             "/api/v1/auth/login",
             "users.auth.login",
@@ -472,9 +477,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let incoming = TcpListenerStream::new(listener);
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-        let svc = CountingAudit {
-            hits: hits.clone(),
-        };
+        let svc = CountingAudit { hits: hits.clone() };
         let server = Server::builder()
             .add_service(AuditServiceServer::new(svc))
             .serve_with_incoming_shutdown(incoming, async {
@@ -498,6 +501,7 @@ mod tests {
             &grpc,
             &headers,
             &peer,
+            Some("production"),
             "GET",
             "/api/v1/me",
             "users.probe",

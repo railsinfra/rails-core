@@ -2,14 +2,23 @@
   "info": {
     "_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     "name": "rails-core",
-    "description": "Same sequence as README: gateway → register business → API key → two accounts → deposit → transfer.\n\n**Setup:** `make dev` (gateway on :8080). Import this file, set `base_url` if needed, then run **1 → 5 in order** (tests save `access_token`, `environment_id`, `api_key`, `from_account_id`, `to_account_id`).\n\nIf users-service has `INTERNAL_SERVICE_TOKEN_ALLOWLIST`, add `X-Internal-Service-Token` on sensitive routes (see `services/users-service/README.md`).",
+    "description": "Same sequence as README: gateway → register business → API key → two SDK users → two accounts → deposit → transfer.\n\n**Setup:** `make dev` (gateway on :8080). Import this file, set `base_url` if needed, then run **1 → 6 in order** (tests save `access_token`, `environment_id`, `api_key`, `holder_a_user_id`, `holder_b_user_id`, `from_account_id`, `to_account_id`).\n\nIf users-service has `INTERNAL_SERVICE_TOKEN_ALLOWLIST`, add `X-Internal-Service-Token` on sensitive routes (see `services/users-service/README.md`).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     { "key": "base_url", "value": "http://localhost:8080" },
+    { "key": "demo_business_name", "value": "" },
+    { "key": "demo_business_website", "value": "" },
+    { "key": "demo_admin_first_name", "value": "" },
+    { "key": "demo_admin_last_name", "value": "" },
+    { "key": "demo_admin_email", "value": "" },
     { "key": "access_token", "value": "" },
     { "key": "environment_id", "value": "" },
     { "key": "api_key", "value": "" },
+    { "key": "holder_a_email", "value": "" },
+    { "key": "holder_b_email", "value": "" },
+    { "key": "holder_a_user_id", "value": "" },
+    { "key": "holder_b_user_id", "value": "" },
     { "key": "from_account_id", "value": "" },
     { "key": "to_account_id", "value": "" },
     { "key": "audit_correlation_id", "value": "" },
@@ -98,7 +107,97 @@
       "response": []
     },
     {
-      "name": "3a. Create account (holder A)",
+      "name": "3a. Create SDK user (holder A)",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "exec": [
+              "pm.collectionVariables.set('holder_a_email', `holder-a+${Date.now()}${Math.floor(Math.random() * 100000)}@example.com`);",
+              "pm.collectionVariables.unset('holder_a_user_id');",
+              "pm.collectionVariables.unset('from_account_id');"
+            ],
+            "type": "text/javascript"
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code !== 200 && pm.response.code !== 201) { return; }",
+              "try {",
+              "  const j = pm.response.json();",
+              "  if (j.user_id) pm.collectionVariables.set('holder_a_user_id', j.user_id);",
+              "} catch (e) { console.warn(e); }"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "X-API-Key", "value": "{{api_key}}" },
+          { "key": "X-Environment", "value": "sandbox" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{holder_a_email}}\",\n  \"first_name\": \"A\",\n  \"last_name\": \"One\",\n  \"password\": \"SecurePass123!\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": "{{base_url}}/users/api/v1/users",
+        "description": "Creates the SDK user that accounts-service must resolve before account creation."
+      },
+      "response": []
+    },
+    {
+      "name": "3b. Create SDK user (holder B)",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "exec": [
+              "pm.collectionVariables.set('holder_b_email', `holder-b+${Date.now()}${Math.floor(Math.random() * 100000)}@example.com`);",
+              "pm.collectionVariables.unset('holder_b_user_id');",
+              "pm.collectionVariables.unset('to_account_id');"
+            ],
+            "type": "text/javascript"
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code !== 200 && pm.response.code !== 201) { return; }",
+              "try {",
+              "  const j = pm.response.json();",
+              "  if (j.user_id) pm.collectionVariables.set('holder_b_user_id', j.user_id);",
+              "} catch (e) { console.warn(e); }"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "X-API-Key", "value": "{{api_key}}" },
+          { "key": "X-Environment", "value": "sandbox" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{holder_b_email}}\",\n  \"first_name\": \"B\",\n  \"last_name\": \"Two\",\n  \"password\": \"SecurePass123!\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": "{{base_url}}/users/api/v1/users",
+        "description": "Creates the SDK user that accounts-service must resolve before account creation."
+      },
+      "response": []
+    },
+    {
+      "name": "4a. Create account (holder A)",
       "event": [
         {
           "listen": "test",
@@ -123,15 +222,16 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"account_type\": \"checking\",\n  \"email\": \"holder-a+{{$timestamp}}{{$randomInt}}@example.com\",\n  \"first_name\": \"A\",\n  \"last_name\": \"One\"\n}",
+          "raw": "{\n  \"account_type\": \"checking\",\n  \"email\": \"{{holder_a_email}}\",\n  \"first_name\": \"A\",\n  \"last_name\": \"One\"\n}",
           "options": { "raw": { "language": "json" } }
         },
-        "url": "{{base_url}}/accounts/api/v1/accounts"
+        "url": "{{base_url}}/accounts/api/v1/accounts",
+        "description": "Accounts-service resolves this request against the existing SDK user created in step 3a."
       },
       "response": []
     },
     {
-      "name": "3b. Create account (holder B)",
+      "name": "4b. Create account (holder B)",
       "event": [
         {
           "listen": "test",
@@ -156,15 +256,16 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"account_type\": \"checking\",\n  \"email\": \"holder-b+{{$timestamp}}{{$randomInt}}@example.com\",\n  \"first_name\": \"B\",\n  \"last_name\": \"Two\"\n}",
+          "raw": "{\n  \"account_type\": \"checking\",\n  \"email\": \"{{holder_b_email}}\",\n  \"first_name\": \"B\",\n  \"last_name\": \"Two\"\n}",
           "options": { "raw": { "language": "json" } }
         },
-        "url": "{{base_url}}/accounts/api/v1/accounts"
+        "url": "{{base_url}}/accounts/api/v1/accounts",
+        "description": "Accounts-service resolves this request against the existing SDK user created in step 3b."
       },
       "response": []
     },
     {
-      "name": "4. Deposit (first account)",
+      "name": "5. Deposit (first account)",
       "request": {
         "method": "POST",
         "header": [
@@ -183,7 +284,7 @@
       "response": []
     },
     {
-      "name": "5. Transfer to second account",
+      "name": "6. Transfer to second account",
       "request": {
         "method": "POST",
         "header": [

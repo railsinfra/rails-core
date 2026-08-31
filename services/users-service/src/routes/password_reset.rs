@@ -49,7 +49,11 @@ pub struct ResetPasswordResponse {
 
 enum PasswordResetRequestOutcome {
     NoSuchUser,
-    Issued { user_id: Uuid, business_id: Uuid },
+    Issued {
+        user_id: Uuid,
+        business_id: Uuid,
+        environment: String,
+    },
 }
 
 async fn request_password_reset_inner(
@@ -147,12 +151,15 @@ async fn request_password_reset_inner(
         tracing::warn!("Email service not configured, password reset email not sent");
     }
 
-    let biz_row = sqlx::query("SELECT business_id FROM users WHERE id = $1")
+    let biz_row = sqlx::query(
+        "SELECT u.business_id, e.type AS environment FROM users u JOIN environments e ON e.id = u.environment_id AND e.business_id = u.business_id WHERE u.id = $1",
+    )
         .bind(&user_id)
         .fetch_one(&state.db)
         .await
         .map_err(|_| AppError::Internal)?;
     let business_id: Uuid = biz_row.get("business_id");
+    let environment: String = biz_row.get("environment");
 
     Ok((
         RequestPasswordResetResponse {
@@ -162,6 +169,7 @@ async fn request_password_reset_inner(
         PasswordResetRequestOutcome::Issued {
             user_id,
             business_id,
+            environment,
         },
     ))
 }
@@ -189,12 +197,18 @@ pub async fn request_password_reset(
                 PasswordResetRequestOutcome::Issued {
                     user_id,
                     business_id,
+                    ..
                 } => (*business_id, ActorType::User, user_id.to_string(), *user_id),
+            };
+            let environment = match &outcome {
+                PasswordResetRequestOutcome::Issued { environment, .. } => environment.as_str(),
+                PasswordResetRequestOutcome::NoSuchUser => "sandbox",
             };
             audit_emit::emit_users_mutation(
                 &state.grpc,
                 &headers,
                 &peer,
+                Some(environment),
                 "POST",
                 path,
                 "users.password_reset.request",
@@ -220,6 +234,7 @@ pub async fn request_password_reset(
                 &state.grpc,
                 &headers,
                 &peer,
+                Some("sandbox"),
                 "POST",
                 path,
                 "users.password_reset.request",
@@ -280,7 +295,7 @@ mod tests {
 async fn reset_password_inner(
     state: AppState,
     Json(payload): Json<ResetPasswordRequest>,
-) -> Result<(ResetPasswordResponse, Uuid, Uuid), AppError> {
+) -> Result<(ResetPasswordResponse, Uuid, Uuid, String), AppError> {
     // Hash the incoming token to compare with stored hash
     let mut hasher = Sha256::new();
     hasher.update(payload.token.as_bytes());
@@ -321,12 +336,15 @@ async fn reset_password_inner(
         }
     };
 
-    let business_row = sqlx::query("SELECT business_id FROM users WHERE id = $1")
+    let business_row = sqlx::query(
+        "SELECT u.business_id, e.type AS environment FROM users u JOIN environments e ON e.id = u.environment_id AND e.business_id = u.business_id WHERE u.id = $1",
+    )
         .bind(&user_id)
         .fetch_one(&mut *tx)
         .await
         .map_err(|_| AppError::Internal)?;
     let business_id: Uuid = business_row.get("business_id");
+    let environment: String = business_row.get("environment");
 
     // Update user password
     sqlx::query("UPDATE users SET password_hash = $1, updated_at = $2 WHERE id = $3")
@@ -368,6 +386,7 @@ async fn reset_password_inner(
         },
         user_id,
         business_id,
+        environment,
     ))
 }
 
@@ -380,11 +399,12 @@ pub async fn reset_password(
     let path = "/api/v1/auth/password-reset/reset";
     let mut meta = HashMap::new();
     match reset_password_inner(state.clone(), Json(payload)).await {
-        Ok((body, uid, bid)) => {
+        Ok((body, uid, bid, environment)) => {
             audit_emit::emit_users_mutation(
                 &state.grpc,
                 &headers,
                 &peer,
+                Some(&environment),
                 "POST",
                 path,
                 "users.password_reset.complete",
@@ -410,6 +430,7 @@ pub async fn reset_password(
                 &state.grpc,
                 &headers,
                 &peer,
+                Some("sandbox"),
                 "POST",
                 path,
                 "users.password_reset.complete",

@@ -1,13 +1,13 @@
 use axum::async_trait;
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
-use jsonwebtoken::{decode, DecodingKey, Validation};
-use serde::Deserialize;
-use uuid::Uuid;
 use chrono::Utc;
 use hmac::{Hmac, Mac};
+use jsonwebtoken::{decode, DecodingKey, Validation};
+use serde::Deserialize;
 use sha2::Sha256;
 use sqlx::Row;
+use uuid::Uuid;
 
 use crate::error::AppError;
 use crate::routes::AppState;
@@ -22,6 +22,7 @@ pub struct AuthContext {
     pub api_key_id: Option<Uuid>,
     pub business_id: Uuid,
     pub environment_id: Uuid,
+    pub environment: String,
 }
 
 /// SDK-only auth: API key + X-Environment. No JWT. Use for routes called exclusively by SDKs (e.g. POST/GET /api/v1/users).
@@ -30,6 +31,7 @@ pub struct ApiKeyOnlyContext {
     pub api_key_id: Uuid,
     pub business_id: Uuid,
     pub environment_id: Uuid,
+    pub environment: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,7 +47,10 @@ struct JwtClaims {
 impl FromRequestParts<AppState> for AuthContext {
     type Rejection = AppError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let environment_id_from_uuid_header: Option<Uuid> = parts
             .headers
             .get(ENVIRONMENT_ID_HEADER)
@@ -53,8 +58,9 @@ impl FromRequestParts<AppState> for AuthContext {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .map(|raw| {
-                Uuid::parse_str(&raw)
-                    .map_err(|_| AppError::BadRequest(format!("Invalid {} header", ENVIRONMENT_ID_HEADER)))
+                Uuid::parse_str(&raw).map_err(|_| {
+                    AppError::BadRequest(format!("Invalid {} header", ENVIRONMENT_ID_HEADER))
+                })
             })
             .transpose()?;
 
@@ -87,17 +93,33 @@ impl FromRequestParts<AppState> for AuthContext {
             let api_key_id: Uuid = rec.try_get("id").map_err(|_| AppError::Internal)?;
             let business_id: Uuid = rec.try_get("business_id").map_err(|_| AppError::Internal)?;
             let status: String = rec.try_get("status").map_err(|_| AppError::Internal)?;
-            let revoked_at: Option<chrono::DateTime<Utc>> = rec.try_get("revoked_at").map_err(|_| AppError::Internal)?;
+            let revoked_at: Option<chrono::DateTime<Utc>> =
+                rec.try_get("revoked_at").map_err(|_| AppError::Internal)?;
 
             if status != "active" || revoked_at.is_some() {
                 return Err(AppError::Unauthorized);
             }
 
-            let environment_id = if let Some(env_id) = environment_id_from_uuid_header {
-                env_id
+            let (environment_id, environment) = if let Some(env_id) =
+                environment_id_from_uuid_header
+            {
+                let env_rec = sqlx::query(
+                    "SELECT type FROM environments WHERE id = $1 AND business_id = $2 AND status = 'active'"
+                )
+                .bind(&env_id)
+                .bind(&business_id)
+                .fetch_optional(&state.db)
+                .await
+                .map_err(|_| AppError::Internal)?
+                .ok_or_else(|| AppError::Forbidden)?;
+
+                let environment: String =
+                    env_rec.try_get("type").map_err(|_| AppError::Internal)?;
+                (env_id, environment)
             } else {
-                let env = environment_from_string_header
-                    .ok_or_else(|| AppError::BadRequest(format!("Missing {} header", ENVIRONMENT_HEADER)))?;
+                let env = environment_from_string_header.ok_or_else(|| {
+                    AppError::BadRequest(format!("Missing {} header", ENVIRONMENT_HEADER))
+                })?;
 
                 if env != "sandbox" && env != "production" {
                     return Err(AppError::BadRequest(format!(
@@ -116,21 +138,9 @@ impl FromRequestParts<AppState> for AuthContext {
                 .map_err(|_| AppError::Internal)?
                 .ok_or_else(|| AppError::Forbidden)?;
 
-                env_rec.try_get("id").map_err(|_| AppError::Internal)?
+                let environment_id = env_rec.try_get("id").map_err(|_| AppError::Internal)?;
+                (environment_id, env)
             };
-
-            let env_ok = sqlx::query(
-                "SELECT 1 FROM environments WHERE id = $1 AND business_id = $2 AND status = 'active'"
-            )
-            .bind(&environment_id)
-            .bind(&business_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|_| AppError::Internal)?;
-
-            if env_ok.is_none() {
-                return Err(AppError::Forbidden);
-            }
 
             let _ = sqlx::query("UPDATE api_keys SET last_used_at = $1 WHERE id = $2")
                 .bind(&now)
@@ -143,11 +153,13 @@ impl FromRequestParts<AppState> for AuthContext {
                 api_key_id: Some(api_key_id),
                 business_id,
                 environment_id,
+                environment,
             });
         }
 
-        let environment_id = environment_id_from_uuid_header
-            .ok_or_else(|| AppError::BadRequest(format!("Missing {} header", ENVIRONMENT_ID_HEADER)))?;
+        let environment_id = environment_id_from_uuid_header.ok_or_else(|| {
+            AppError::BadRequest(format!("Missing {} header", ENVIRONMENT_ID_HEADER))
+        })?;
 
         let auth_header = parts
             .headers
@@ -187,16 +199,18 @@ impl FromRequestParts<AppState> for AuthContext {
             // User doesn't exist in requested environment, but check if they exist in any environment for the same business
             // This allows admins to access both sandbox and production even if they only have a user record in one
             let any_user_rec = sqlx::query(
-                "SELECT business_id FROM users WHERE id = $1 AND status = 'active' LIMIT 1"
+                "SELECT business_id FROM users WHERE id = $1 AND status = 'active' LIMIT 1",
             )
             .bind(&user_id)
             .fetch_optional(&state.db)
             .await
             .map_err(|_| AppError::Internal)?
             .ok_or(AppError::Forbidden)?;
-            
-            let user_business_id: Uuid = any_user_rec.try_get("business_id").map_err(|_| AppError::Internal)?;
-            
+
+            let user_business_id: Uuid = any_user_rec
+                .try_get("business_id")
+                .map_err(|_| AppError::Internal)?;
+
             // Verify that the requested environment_id belongs to the same business
             let env_check = sqlx::query(
                 "SELECT 1 FROM environments WHERE id = $1 AND business_id = $2 AND status = 'active'"
@@ -206,19 +220,31 @@ impl FromRequestParts<AppState> for AuthContext {
             .fetch_optional(&state.db)
             .await
             .map_err(|_| AppError::Internal)?;
-            
+
             if env_check.is_none() {
                 return Err(AppError::Forbidden);
             }
-            
+
             user_business_id
         };
+
+        let env_rec = sqlx::query(
+            "SELECT type FROM environments WHERE id = $1 AND business_id = $2 AND status = 'active'",
+        )
+        .bind(&environment_id)
+        .bind(&business_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|_| AppError::Internal)?
+        .ok_or(AppError::Forbidden)?;
+        let environment: String = env_rec.try_get("type").map_err(|_| AppError::Internal)?;
 
         Ok(Self {
             user_id: Some(user_id),
             api_key_id: None,
             business_id,
             environment_id,
+            environment,
         })
     }
 }
@@ -227,7 +253,10 @@ impl FromRequestParts<AppState> for AuthContext {
 impl FromRequestParts<AppState> for ApiKeyOnlyContext {
     type Rejection = AppError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let environment_id_from_uuid_header: Option<Uuid> = parts
             .headers
             .get(ENVIRONMENT_ID_HEADER)
@@ -235,8 +264,9 @@ impl FromRequestParts<AppState> for ApiKeyOnlyContext {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .map(|raw| {
-                Uuid::parse_str(&raw)
-                    .map_err(|_| AppError::BadRequest(format!("Invalid {} header", ENVIRONMENT_ID_HEADER)))
+                Uuid::parse_str(&raw).map_err(|_| {
+                    AppError::BadRequest(format!("Invalid {} header", ENVIRONMENT_ID_HEADER))
+                })
             })
             .transpose()?;
 
@@ -271,17 +301,30 @@ impl FromRequestParts<AppState> for ApiKeyOnlyContext {
         let api_key_id: Uuid = rec.try_get("id").map_err(|_| AppError::Internal)?;
         let business_id: Uuid = rec.try_get("business_id").map_err(|_| AppError::Internal)?;
         let status: String = rec.try_get("status").map_err(|_| AppError::Internal)?;
-        let revoked_at: Option<chrono::DateTime<Utc>> = rec.try_get("revoked_at").map_err(|_| AppError::Internal)?;
+        let revoked_at: Option<chrono::DateTime<Utc>> =
+            rec.try_get("revoked_at").map_err(|_| AppError::Internal)?;
 
         if status != "active" || revoked_at.is_some() {
             return Err(AppError::Unauthorized);
         }
 
-        let environment_id = if let Some(env_id) = environment_id_from_uuid_header {
-            env_id
+        let (environment_id, environment) = if let Some(env_id) = environment_id_from_uuid_header {
+            let env_rec = sqlx::query(
+                "SELECT type FROM environments WHERE id = $1 AND business_id = $2 AND status = 'active'"
+            )
+            .bind(&env_id)
+            .bind(&business_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|_| AppError::Internal)?
+            .ok_or_else(|| AppError::Forbidden)?;
+
+            let environment: String = env_rec.try_get("type").map_err(|_| AppError::Internal)?;
+            (env_id, environment)
         } else {
-            let env = environment_from_string_header
-                .ok_or_else(|| AppError::BadRequest(format!("Missing {} header", ENVIRONMENT_HEADER)))?;
+            let env = environment_from_string_header.ok_or_else(|| {
+                AppError::BadRequest(format!("Missing {} header", ENVIRONMENT_HEADER))
+            })?;
 
             if env != "sandbox" && env != "production" {
                 return Err(AppError::BadRequest(format!(
@@ -300,21 +343,9 @@ impl FromRequestParts<AppState> for ApiKeyOnlyContext {
             .map_err(|_| AppError::Internal)?
             .ok_or_else(|| AppError::Forbidden)?;
 
-            env_rec.try_get("id").map_err(|_| AppError::Internal)?
+            let environment_id = env_rec.try_get("id").map_err(|_| AppError::Internal)?;
+            (environment_id, env)
         };
-
-        let env_ok = sqlx::query(
-            "SELECT 1 FROM environments WHERE id = $1 AND business_id = $2 AND status = 'active'"
-        )
-        .bind(&environment_id)
-        .bind(&business_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|_| AppError::Internal)?;
-
-        if env_ok.is_none() {
-            return Err(AppError::Forbidden);
-        }
 
         let _ = sqlx::query("UPDATE api_keys SET last_used_at = $1 WHERE id = $2")
             .bind(&now)
@@ -326,6 +357,7 @@ impl FromRequestParts<AppState> for ApiKeyOnlyContext {
             api_key_id,
             business_id,
             environment_id,
+            environment,
         })
     }
 }
@@ -334,7 +366,8 @@ pub(crate) fn hash_api_key(api_key_plain: &str) -> Result<String, AppError> {
     const API_KEY_HASH_SECRET_ENV: &str = "API_KEY_HASH_SECRET";
     let secret = std::env::var(API_KEY_HASH_SECRET_ENV)
         .unwrap_or_else(|_| "dev_api_key_hash_secret".to_string());
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).map_err(|_| AppError::Internal)?;
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).map_err(|_| AppError::Internal)?;
     mac.update(api_key_plain.as_bytes());
     let out = mac.finalize().into_bytes();
     Ok(hex_encode(&out))
@@ -360,7 +393,10 @@ mod tests {
         let _lock = global_test_lock();
         const API_KEY_HASH_SECRET_ENV: &str = "API_KEY_HASH_SECRET";
         let saved = std::env::var(API_KEY_HASH_SECRET_ENV).ok();
-        std::env::set_var(API_KEY_HASH_SECRET_ENV, "unit_test_api_key_hash_secret_fixed");
+        std::env::set_var(
+            API_KEY_HASH_SECRET_ENV,
+            "unit_test_api_key_hash_secret_fixed",
+        );
         let a = hash_api_key("my-api-key").expect("hash");
         let b = hash_api_key("my-api-key").expect("hash");
         assert_eq!(a, b);
